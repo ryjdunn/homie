@@ -1,13 +1,21 @@
-# Mac Mini Setup
+# Mac Studio / Mac Mini Setup
 
-This is the recommended path for hosting Homie on a Mac mini over Tailscale. It uses native Homebrew Postgres, a production Next.js build, and a user-level `launchd` service that starts Homie on boot/login.
+This is the recommended path for hosting Homie on a Mac Studio or Mac mini over Tailscale. It uses native Homebrew Postgres, a production Next.js build, and a user-level `launchd` service that starts Homie on boot/login.
 
-## Quick Start
+The filename still says `mac-mini` because that was the original target, but the same flow is intended for the Mac Studio.
 
-From a fresh clone on the Mac mini:
+## Fresh Machine Checklist
+
+Before setup:
+
+- Sign into the Mac with the user account that should run Homie.
+- Install Xcode Command Line Tools if Git prompts for them.
+- Install Homebrew from <https://brew.sh>.
+- Optional but recommended: install and sign into Tailscale on the Mac Studio.
+- Clone the repository.
 
 ```bash
-git clone https://github.com/<your-github-user>/homie.git
+git clone https://github.com/ryjdunn/homie.git
 cd homie
 ./setup.sh
 ```
@@ -29,8 +37,26 @@ After setup, Homie listens on:
 
 ```text
 http://127.0.0.1:3000
-http://<mac-mini-tailscale-name-or-ip>:3000
+http://<mac-studio-tailscale-name-or-ip>:3000
 ```
+
+## Environment
+
+`./setup.sh` creates `.env` if one does not already exist. Existing `.env` files are preserved.
+
+Default production values:
+
+```text
+DATABASE_URL=postgres://localhost:5432/homie
+HOMIE_UPLOAD_DIR=./data/uploads
+HOMIE_AGENT_TOKEN=<generated>
+HOMIE_DB_POOL_SIZE=10
+HOMIE_HOST=0.0.0.0
+HOSTNAME=0.0.0.0
+PORT=3000
+```
+
+`HOMIE_HOST` is the preferred host setting. `HOSTNAME` is still written for compatibility with the existing start script and Next conventions, but setup does not read the machine's shell `HOSTNAME` as a default.
 
 ## Useful Options
 
@@ -55,7 +81,40 @@ Use a different port:
 Use a custom database or upload directory:
 
 ```bash
-DATABASE_URL=postgres://localhost:5432/homie_prod HOMIE_UPLOAD_DIR=/Users/ryan/homie-uploads ./setup.sh
+DATABASE_URL=postgres://localhost:5432/homie_prod HOMIE_UPLOAD_DIR=/Users/ryandunn/homie-uploads ./setup.sh
+```
+
+Use a custom bind host:
+
+```bash
+HOMIE_HOST=0.0.0.0 ./setup.sh
+```
+
+## Tailscale Access
+
+For direct tailnet access without Tailscale Serve, open:
+
+```text
+http://<mac-studio-tailscale-name-or-ip>:3000
+```
+
+To put Tailscale Serve in front of the app:
+
+```bash
+tailscale serve --bg 3000
+tailscale serve status
+```
+
+Tailscale Serve prints an HTTPS URL such as:
+
+```text
+https://<mac-studio-name>.<tailnet>.ts.net/
+```
+
+Turn it off with:
+
+```bash
+tailscale serve --https=443 off
 ```
 
 ## Service Commands
@@ -98,9 +157,17 @@ tail -f data/homie.err.log
 bash scripts/healthcheck.sh http://127.0.0.1:3000/api/health
 ```
 
-## Updating After GitHub Pulls
+Expected response:
 
-On the Mac mini:
+```json
+{
+  "ok": true
+}
+```
+
+## Updating After Git Pulls
+
+On the Mac Studio:
 
 ```bash
 git pull --ff-only
@@ -110,12 +177,58 @@ npm run build
 launchctl kickstart -k gui/$(id -u)/com.ryandunn.homie
 ```
 
+If migrations or build fail, leave the existing launchd service running and inspect the error before restarting.
+
 ## Backups
 
-For the native Mac mini setup, back up:
+For the native macOS setup, back up:
 
 - The Postgres database named by `DATABASE_URL`.
 - The upload directory named by `HOMIE_UPLOAD_DIR`.
 - The local `.env` file, stored somewhere private.
 
-The Docker-oriented `scripts/backup.sh` is kept for Docker Compose installs; native backup automation can be added once the Mac mini runtime location is finalized.
+Quick manual database backup:
+
+```bash
+mkdir -p backups
+pg_dump "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" > "backups/homie-$(date +%Y%m%d-%H%M%S).sql"
+```
+
+Restore example:
+
+```bash
+psql "$(grep '^DATABASE_URL=' .env | cut -d= -f2-)" < backups/homie-YYYYMMDD-HHMMSS.sql
+```
+
+The Docker-oriented `scripts/backup.sh` is kept for Docker Compose installs.
+
+## Troubleshooting
+
+If the app does not respond:
+
+```bash
+launchctl print gui/$(id -u)/com.ryandunn.homie
+tail -100 data/homie.err.log
+bash scripts/healthcheck.sh http://127.0.0.1:3000/api/health
+```
+
+If Postgres is not ready:
+
+```bash
+brew services start postgresql@17
+pg_isready -h localhost
+```
+
+If the phone cannot reach it over Tailscale:
+
+```bash
+tailscale status
+curl http://127.0.0.1:3000/api/health
+curl http://$(tailscale ip -4):3000/api/health
+```
+
+If using Tailscale Serve:
+
+```bash
+tailscale serve status
+```

@@ -40,12 +40,22 @@ export type CreateTaskInput = Pick<
     frequency: NewRecurringRule["frequency"];
     interval: number;
     anchorDate: Date;
+    endDate?: string | null;
   };
 };
 
 export type UpdateTaskInput = Partial<
   Pick<NewTask, "title" | "description" | "status" | "priority" | "dueAt" | "plannedFor" | "categoryId" | "assigneeId">
->;
+> & {
+  recurrence?:
+    | {
+        frequency: NewRecurringRule["frequency"];
+        interval: number;
+        anchorDate: Date;
+        endDate?: string | null;
+      }
+    | null;
+};
 
 export type AddNoteInput = Pick<NewTaskNote, "body" | "authorType" | "authorPersonId" | "agentName">;
 
@@ -56,6 +66,7 @@ export type AttachPhotoInput = Pick<
 
 export type TaskWithContext = Task & {
   assignee: Person | null;
+  createdBy: Person | null;
   category: Category;
   photos: TaskPhoto[];
   notes: TaskNote[];

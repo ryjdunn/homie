@@ -14,7 +14,8 @@ fi
 export PATH="/opt/homebrew/bin:/opt/homebrew/opt/postgresql@17/bin:/usr/local/bin:/usr/local/opt/postgresql@17/bin:${PATH}"
 export DATABASE_URL="${DATABASE_URL:-postgres://localhost:5432/homie}"
 export HOMIE_UPLOAD_DIR="${HOMIE_UPLOAD_DIR:-${ROOT}/data/uploads}"
-export HOSTNAME="${HOSTNAME:-0.0.0.0}"
+export HOMIE_HOST="${HOMIE_HOST:-${HOSTNAME:-0.0.0.0}}"
+export HOSTNAME="${HOMIE_HOST}"
 export PORT="${PORT:-3000}"
 export NODE_ENV=production
 export NEXT_TELEMETRY_DISABLED=1

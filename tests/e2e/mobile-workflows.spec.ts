@@ -5,39 +5,38 @@ const png = Buffer.from(
   "base64",
 );
 
-test("mobile task creation, photos, notes, split, filters, and completion", async ({ page }, testInfo) => {
+test("mobile task creation, photos, notes, filters, and completion", async ({ page }, testInfo) => {
   const title = `Take pine branches to the dump ${testInfo.project.name}`;
-  const childOne = `Load branches ${testInfo.project.name}`;
-  const childTwo = `Sweep driveway ${testInfo.project.name}`;
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Homie" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /No urgent house stuff|worth seeing now/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /Nada|scheduled or due/ })).toBeVisible();
 
   await page.getByRole("button", { name: "Add task" }).click();
-  await page.getByLabel("Title").fill(title);
-  await page.getByLabel("Notes").fill("Stack is next to the side gate.");
-  await page.getByLabel("Category").selectOption("cat_dump_run");
-  await page.getByLabel("Assignee").selectOption("person_ryan");
-  await page.getByRole("button", { name: "Urgent" }).click();
-  await page.locator('input[type="file"]').nth(1).setInputFiles([
+  const addPanel = page.locator("form.add-panel");
+  await addPanel.getByRole("textbox", { name: "Task" }).fill(title);
+  await addPanel.getByRole("textbox", { name: "Note" }).fill("Stack is next to the side gate.");
+  await addPanel.getByLabel("Category").selectOption("cat_sell_donate");
+  await addPanel.getByLabel("For").selectOption("person_ryan");
+  await addPanel.getByRole("button", { name: "Urgent" }).click();
+  await addPanel.locator('input[type="file"]').nth(1).setInputFiles([
     { name: "branches.png", mimeType: "image/png", buffer: png },
     { name: "pile.png", mimeType: "image/png", buffer: png },
   ]);
-  await page.locator("form").getByRole("button", { name: "Add task", exact: true }).click();
+  await addPanel.getByRole("button", { name: "Add task", exact: true }).click();
 
+  await expect(addPanel).toHaveCount(0);
+  await page.getByRole("button", { name: "All", exact: true }).click();
+  const card = page.getByTestId("task-card").filter({ hasText: title });
+  await expect(card).toBeVisible();
+  await card.getByRole("button").filter({ hasText: title }).click();
   await expect(page.getByRole("heading", { name: title })).toBeVisible();
   await page.getByPlaceholder("Add a note").fill("Borrow gloves from the garage shelf.");
   await page.getByRole("button", { name: "Send note" }).click();
   await expect(page.getByText("Borrow gloves from the garage shelf.")).toBeVisible();
-
-  await page.getByPlaceholder("First smaller task\nSecond smaller task").fill(`${childOne}\n${childTwo}`);
-  await page.getByRole("button", { name: "Split task" }).click();
   await page.getByRole("button", { name: "Close task detail" }).click();
 
-  await page.getByRole("button", { name: "All", exact: true }).click();
-  await expect(page.getByText(childOne)).toBeVisible();
-  await expect(page.getByText(childTwo)).toBeVisible();
+  await expect(page.getByText(title)).toBeVisible();
 
   await page.getByRole("button", { name: `Complete ${title}` }).click();
   await page.getByRole("button", { name: "Done", exact: true }).click();

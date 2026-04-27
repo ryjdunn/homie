@@ -10,16 +10,14 @@ import {
   ImagePlus,
   Inbox,
   ListFilter,
-  MessageSquare,
   Plus,
-  Scissors,
+  Repeat2,
   Send,
-  Settings,
   Trash2,
   Undo2,
   X,
 } from "lucide-react";
-import type { CSSProperties, FormEvent, ReactNode } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { startTransition, useEffect, useMemo, useState } from "react";
 import clsx from "clsx";
 
@@ -56,6 +54,8 @@ type TaskNote = {
   createdAt: string;
 };
 
+type RecurrenceFrequency = "daily" | "weekly" | "every_n_days" | "monthly";
+
 type Task = {
   id: string;
   title: string;
@@ -66,11 +66,22 @@ type Task = {
   plannedFor: string | null;
   completedAt: string | null;
   assigneeId: string | null;
+  createdById: string | null;
   categoryId: string;
   assignee: Person | null;
+  createdBy: Person | null;
   category: Category;
   photos: TaskPhoto[];
   notes: TaskNote[];
+  recurringRule: {
+    id: string;
+    frequency: RecurrenceFrequency;
+    interval: number;
+    anchorDate: string;
+    nextDueAt: string;
+    endDate: string | null;
+    isActive: boolean;
+  } | null;
   urgency: "overdue" | "today" | "soon" | "urgent" | "normal" | "done";
 };
 
@@ -107,6 +118,10 @@ export function HomieApp() {
     if (typeof window === "undefined") return "person_ryan";
     return window.localStorage.getItem("homie.personId") || "person_ryan";
   });
+  const [personScopeId, setPersonScopeId] = useState(() => {
+    if (typeof window === "undefined") return "person_ryan";
+    return window.localStorage.getItem("homie.personScopeId") || window.localStorage.getItem("homie.personId") || "person_ryan";
+  });
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [assigneeFilter, setAssigneeFilter] = useState("all");
   const [timeSensitiveOnly, setTimeSensitiveOnly] = useState(false);
@@ -116,6 +131,7 @@ export function HomieApp() {
 
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
   const planningDays = useMemo(() => nextSevenDays(), []);
+  const todayKey = dateKey(new Date());
 
   async function refresh() {
     const [bootstrapData, taskData] = await Promise.all([
@@ -138,11 +154,14 @@ export function HomieApp() {
     window.localStorage.setItem("homie.personId", currentPersonId);
   }, [currentPersonId]);
 
+  useEffect(() => {
+    window.localStorage.setItem("homie.personScopeId", personScopeId);
+  }, [personScopeId]);
+
   const visibleTasks = useMemo(() => {
     return tasks.filter((task) => {
       if (view === "done") return task.status === "done";
-      if (view === "today") return task.status !== "done" && task.urgency !== "normal";
-      if (view === "add" || view === "week") return false;
+      if (view === "add" || view === "today" || view === "week") return false;
       if (task.status === "done") return false;
       if (categoryFilter !== "all" && task.categoryId !== categoryFilter) return false;
       if (assigneeFilter !== "all" && task.assigneeId !== assigneeFilter) return false;
@@ -236,25 +255,26 @@ export function HomieApp() {
     );
   }
 
-  const stats = taskStats(tasks);
+  const selectablePeople = bootstrap.people.filter((person) => person.slug !== "unassigned");
+  const scopeOptions = [...selectablePeople.map((person) => person.id), "all"];
+  const currentPerson = selectablePeople.find((person) => person.id === currentPersonId) ?? selectablePeople[0];
+  const personScope = personScopeId === "all" ? null : selectablePeople.find((person) => person.id === personScopeId) ?? currentPerson;
+  const cyclePersonScope = () => {
+    const currentIndex = scopeOptions.indexOf(personScopeId);
+    const nextScope = scopeOptions[(currentIndex + 1) % scopeOptions.length] ?? currentPerson.id;
+    setPersonScopeId(nextScope);
+    if (nextScope !== "all") {
+      setCurrentPersonId(nextScope);
+    }
+  };
 
   return (
     <main className="homie-shell">
       <section className={clsx("app-hero", view === "add" && "is-compact")}>
         <header className="top-bar">
-          <button className="ghost-icon" type="button" aria-label="Settings">
-            <Settings size={24} />
-          </button>
           <div className="brand-lockup">
-            <span className="app-mark">H</span>
-            <div>
-              <h1>Homie</h1>
-              <p>{summaryLine(tasks)}</p>
-            </div>
+            <h1>Homie</h1>
           </div>
-          <button className="ghost-icon" type="button" aria-label="Messages">
-            <MessageSquare size={24} />
-          </button>
         </header>
 
         {view !== "add" ? (
@@ -265,36 +285,16 @@ export function HomieApp() {
             <NavButton icon={<ClipboardCheck size={18} />} label="Done" active={view === "done"} onClick={() => setView("done")} />
           </nav>
         ) : null}
-
-        {view !== "add" ? (
-          <section className="pulse-card" aria-label="House pulse">
-            <div>
-              <strong>{stats.open}</strong>
-              <span>open</span>
-            </div>
-            <div className="task-ring" style={{ "--ring-value": `${stats.doneShare}%` } as CSSProperties}>
-              <span>{stats.doneShare}%</span>
-            </div>
-            <div>
-              <strong>{stats.timeSensitive}</strong>
-              <span>needs eyes</span>
-            </div>
-          </section>
-        ) : null}
       </section>
 
-      <label className="person-switch">
-        <span>Acting as</span>
-        <select value={currentPersonId} onChange={(event) => setCurrentPersonId(event.target.value)}>
-          {bootstrap.people
-            .filter((person) => person.slug !== "unassigned")
-            .map((person) => (
-              <option key={person.id} value={person.id}>
-                {person.name}
-              </option>
-            ))}
-        </select>
-      </label>
+      {view === "today" || view === "week" ? (
+        <div className="person-switch" role="group" aria-label="Owner filter">
+          <span>Showing</span>
+          <button className="person-picker" type="button" onClick={cyclePersonScope} aria-label="Cycle owner filter">
+            {personScope ? personScope.name : "All"}
+          </button>
+        </div>
+      ) : null}
 
       {error ? (
         <section className="error-band" role="alert">
@@ -310,17 +310,29 @@ export function HomieApp() {
           bootstrap={bootstrap}
           currentPersonId={currentPersonId}
           onCancel={() => setView("today")}
-          onCreated={async (task) => {
-            setSelectedTaskId(task.id);
+          onCreated={async () => {
+            setSelectedTaskId(null);
             setView("today");
             await refresh();
           }}
           onError={setError}
         />
+      ) : view === "today" ? (
+        <TodayPlan
+          tasks={tasks}
+          todayKey={todayKey}
+          assigneeScopeId={personScopeId}
+          busyTaskId={busyTaskId}
+          recentlyCompletedId={recentlyCompletedId}
+          onOpen={(task) => setSelectedTaskId(task.id)}
+          onComplete={completeTask}
+          onReopen={reopenTask}
+        />
       ) : view === "week" ? (
         <WeekPlan
           tasks={tasks}
           days={planningDays}
+          assigneeScopeId={personScopeId}
           busyTaskId={busyTaskId}
           recentlyCompletedId={recentlyCompletedId}
           onOpen={(task) => setSelectedTaskId(task.id)}
@@ -331,7 +343,7 @@ export function HomieApp() {
         <>
           <section className="view-head">
             <div>
-              <p className="eyebrow">{view === "today" ? "Time sensitive" : view === "done" ? "Recent wins" : "All tasks"}</p>
+              <p className="eyebrow">{view === "done" ? "Recent wins" : "All tasks"}</p>
               <h2>{viewTitle(view, visibleTasks.length)}</h2>
             </div>
             {view === "all" ? (
@@ -389,10 +401,10 @@ export function HomieApp() {
 
       {selectedTask ? (
         <TaskDetailSheet
+          bootstrap={bootstrap}
           task={selectedTask}
           currentPersonId={currentPersonId}
           busy={busyTaskId === selectedTask.id}
-          planningDays={planningDays}
           onClose={() => setSelectedTaskId(null)}
           onArchive={() => archiveTask(selectedTask)}
           onPlan={(plannedFor) => planTask(selectedTask, plannedFor)}
@@ -403,8 +415,7 @@ export function HomieApp() {
 
       {view !== "add" ? (
         <button className="floating-add" type="button" onClick={() => setView("add")} aria-label="Add task">
-          <Camera size={20} />
-          <Plus size={26} />
+          <Plus size={28} />
         </button>
       ) : null}
     </main>
@@ -414,6 +425,7 @@ export function HomieApp() {
 function WeekPlan({
   tasks,
   days,
+  assigneeScopeId,
   busyTaskId,
   recentlyCompletedId,
   onOpen,
@@ -422,81 +434,210 @@ function WeekPlan({
 }: {
   tasks: Task[];
   days: PlanningDay[];
+  assigneeScopeId: string;
   busyTaskId: string | null;
   recentlyCompletedId: string | null;
   onOpen: (task: Task) => void;
   onComplete: (task: Task) => void;
   onReopen: (task: Task) => void;
 }) {
-  const openTasks = tasks.filter(isOpenTask);
+  const openTasks = filterByAssigneeScope(tasks.filter(isOpenTask), assigneeScopeId);
   const plannedThisWeek = openTasks.filter((task) => task.plannedFor && days.some((day) => day.value === task.plannedFor));
-  const unplanned = openTasks.filter((task) => !task.plannedFor).slice(0, 5);
+  const weekStart = days[0]?.value;
+  const weekEnd = days[days.length - 1]?.value;
+  const dueThisWeek =
+    weekStart && weekEnd
+      ? openTasks.filter((task) => !task.plannedFor && task.dueAt && isDateKeyInRange(dueDateKey(task.dueAt), weekStart, weekEnd))
+      : [];
+  const weekCount = plannedThisWeek.length + dueThisWeek.length;
+  const plannedDays = days
+    .map((day) => ({
+      day,
+      tasks: openTasks.filter((task) => task.plannedFor === day.value),
+    }))
+    .filter((item) => item.tasks.length > 0);
 
   return (
     <>
       <section className="view-head">
         <div>
-          <p className="eyebrow">Next 7 days</p>
-          <h2>{plannedThisWeek.length ? `${plannedThisWeek.length} planned this week` : "A fresh week to shape"}</h2>
+          <p className="eyebrow">Week</p>
+          <h2>{weekCount ? `${weekCount} scheduled or due` : "Nada"}</h2>
         </div>
       </section>
 
-      <section className="week-plan" aria-label="Next 7 days">
-        {days.map((day) => {
-          const dayTasks = openTasks.filter((task) => task.plannedFor === day.value);
-          return (
-            <article className="week-day-card" key={day.value} data-testid="week-day-card">
-              <header className="week-day-head">
-                <div>
-                  <p className="eyebrow">{day.caption}</p>
-                  <h3>{day.label}</h3>
-                </div>
-                <span className="week-count">{dayTasks.length}</span>
-              </header>
-              {dayTasks.length ? (
-                <div className="task-stack compact-stack">
-                  {dayTasks.map((task) => (
-                    <TaskCard
-                      key={task.id}
-                      task={task}
-                      busy={busyTaskId === task.id}
-                      justCompleted={recentlyCompletedId === task.id}
-                      onOpen={() => onOpen(task)}
-                      onComplete={() => onComplete(task)}
-                      onReopen={() => onReopen(task)}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <p className="week-empty">Open day. Nothing promised yet.</p>
-              )}
-            </article>
-          );
-        })}
+      <section className="board-sections" aria-label="Next 7 days">
+        <section className="board-section" aria-label="Scheduled">
+          <SectionHeader title="Scheduled" count={plannedThisWeek.length} />
+          {plannedDays.length ? (
+            <div className="week-plan">
+              {plannedDays.map(({ day, tasks: dayTasks }) => (
+                <article className="week-day-card" key={day.value} data-testid="week-day-card">
+                  <header className="week-day-head">
+                    <div>
+                      <p className="eyebrow">{day.monthDay}</p>
+                      <h3>{day.label}</h3>
+                    </div>
+                    <span className="week-count">{dayTasks.length}</span>
+                  </header>
+                  <div className="task-stack compact-stack">
+                    {dayTasks.map((task) => (
+                      <TaskCard
+                        key={task.id}
+                        task={task}
+                        busy={busyTaskId === task.id}
+                        justCompleted={recentlyCompletedId === task.id}
+                        onOpen={() => onOpen(task)}
+                        onComplete={() => onComplete(task)}
+                        onReopen={() => onReopen(task)}
+                      />
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <SectionEmpty icon={<CalendarDays size={28} />} text="Nothing scheduled this week." />
+          )}
+        </section>
+
+        <TaskGroupSection
+          title="Due"
+          tasks={dueThisWeek}
+          emptyText="Nothing due this week."
+          emptyIcon={<Inbox size={26} />}
+          busyTaskId={busyTaskId}
+          recentlyCompletedId={recentlyCompletedId}
+          onOpen={onOpen}
+          onComplete={onComplete}
+          onReopen={onReopen}
+        />
+      </section>
+    </>
+  );
+}
+
+function TodayPlan({
+  tasks,
+  todayKey,
+  assigneeScopeId,
+  busyTaskId,
+  recentlyCompletedId,
+  onOpen,
+  onComplete,
+  onReopen,
+}: {
+  tasks: Task[];
+  todayKey: string;
+  assigneeScopeId: string;
+  busyTaskId: string | null;
+  recentlyCompletedId: string | null;
+  onOpen: (task: Task) => void;
+  onComplete: (task: Task) => void;
+  onReopen: (task: Task) => void;
+}) {
+  const openTasks = filterByAssigneeScope(tasks.filter(isOpenTask), assigneeScopeId);
+  const scheduledToday = openTasks.filter((task) => task.plannedFor === todayKey);
+  const dueToday = openTasks.filter((task) => !task.plannedFor && task.dueAt && dueDateKey(task.dueAt) <= todayKey);
+  const todayCount = scheduledToday.length + dueToday.length;
+
+  return (
+    <>
+      <section className="view-head">
+        <div>
+          <p className="eyebrow">Today</p>
+          <h2>{todayCount ? `${todayCount} scheduled or due` : "Nada"}</h2>
+        </div>
       </section>
 
-      {unplanned.length ? (
-        <section className="planning-backlog" aria-label="Unplanned tasks">
-          <div>
-            <p className="eyebrow">Still unplanned</p>
-            <h3>Pick a task, then choose a day.</h3>
-          </div>
-          <div className="task-stack compact-stack">
-            {unplanned.map((task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                busy={busyTaskId === task.id}
-                justCompleted={recentlyCompletedId === task.id}
-                onOpen={() => onOpen(task)}
-                onComplete={() => onComplete(task)}
-                onReopen={() => onReopen(task)}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
+      <section className="board-sections" aria-label="Today tasks">
+        <TaskGroupSection
+          title="Scheduled"
+          tasks={scheduledToday}
+          emptyText="Nothing scheduled today."
+          emptyIcon={<CalendarClock size={26} />}
+          busyTaskId={busyTaskId}
+          recentlyCompletedId={recentlyCompletedId}
+          onOpen={onOpen}
+          onComplete={onComplete}
+          onReopen={onReopen}
+        />
+        <TaskGroupSection
+          title="Due"
+          tasks={dueToday}
+          emptyText="Nothing due today."
+          emptyIcon={<Inbox size={26} />}
+          busyTaskId={busyTaskId}
+          recentlyCompletedId={recentlyCompletedId}
+          onOpen={onOpen}
+          onComplete={onComplete}
+          onReopen={onReopen}
+        />
+      </section>
     </>
+  );
+}
+
+function TaskGroupSection({
+  title,
+  tasks,
+  emptyText,
+  emptyIcon,
+  busyTaskId,
+  recentlyCompletedId,
+  onOpen,
+  onComplete,
+  onReopen,
+}: {
+  title: string;
+  tasks: Task[];
+  emptyText: string;
+  emptyIcon: ReactNode;
+  busyTaskId: string | null;
+  recentlyCompletedId: string | null;
+  onOpen: (task: Task) => void;
+  onComplete: (task: Task) => void;
+  onReopen: (task: Task) => void;
+}) {
+  return (
+    <section className="board-section" aria-label={title}>
+      <SectionHeader title={title} count={tasks.length} />
+      {tasks.length ? (
+        <div className="task-stack">
+          {tasks.map((task) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              busy={busyTaskId === task.id}
+              justCompleted={recentlyCompletedId === task.id}
+              onOpen={() => onOpen(task)}
+              onComplete={() => onComplete(task)}
+              onReopen={() => onReopen(task)}
+            />
+          ))}
+        </div>
+      ) : (
+        <SectionEmpty icon={emptyIcon} text={emptyText} />
+      )}
+    </section>
+  );
+}
+
+function SectionHeader({ title, count }: { title: string; count: number }) {
+  return (
+    <header className="board-section-head">
+      <h3>{title}</h3>
+      <span>{count}</span>
+    </header>
+  );
+}
+
+function SectionEmpty({ icon, text }: { icon: ReactNode; text: string }) {
+  return (
+    <div className="section-empty">
+      <span>{icon}</span>
+      <p>{text}</p>
+    </div>
   );
 }
 
@@ -516,9 +657,14 @@ function AddTaskPanel({
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [categoryId, setCategoryId] = useState("cat_house");
-  const [assigneeId, setAssigneeId] = useState("person_unassigned");
+  const [assigneeId, setAssigneeId] = useState(currentPersonId);
   const [priority, setPriority] = useState<Task["priority"]>("normal");
   const [dueAt, setDueAt] = useState("");
+  const [repeats, setRepeats] = useState(false);
+  const [repeatEvery, setRepeatEvery] = useState(1);
+  const [repeatFrequency, setRepeatFrequency] = useState<RecurrenceFrequency>("weekly");
+  const [repeatEnds, setRepeatEnds] = useState(false);
+  const [repeatEndDate, setRepeatEndDate] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -526,6 +672,7 @@ function AddTaskPanel({
     event.preventDefault();
     setSubmitting(true);
     try {
+      const recurrenceAnchor = dueAt || dateKey(new Date());
       const task = await api<Task>("/api/tasks", {
         method: "POST",
         headers: {
@@ -538,8 +685,16 @@ function AddTaskPanel({
           categoryId,
           assigneeId,
           priority,
-          dueAt: dueAt ? new Date(dueAt).toISOString() : null,
+          dueAt: dueAt ? localDateToIso(dueAt) : repeats ? localDateToIso(recurrenceAnchor) : null,
           createdById: currentPersonId,
+          recurrence: repeats
+            ? {
+                frequency: repeatFrequency,
+                interval: repeatEvery,
+                anchorDate: localDateToIso(recurrenceAnchor),
+                endDate: repeatEnds && repeatEndDate ? repeatEndDate : null,
+              }
+            : undefined,
         }),
       });
 
@@ -555,8 +710,15 @@ function AddTaskPanel({
 
       setTitle("");
       setDescription("");
+      setCategoryId("cat_house");
+      setAssigneeId(currentPersonId);
       setPriority("normal");
       setDueAt("");
+      setRepeats(false);
+      setRepeatEvery(1);
+      setRepeatFrequency("weekly");
+      setRepeatEnds(false);
+      setRepeatEndDate("");
       setFiles([]);
       await onCreated(task);
     } catch (nextError) {
@@ -571,113 +733,158 @@ function AddTaskPanel({
       <section className="view-head">
         <div>
           <p className="eyebrow">New task</p>
-          <h2>Add to the house board</h2>
+          <h2>What needs doing?</h2>
         </div>
-        <button className="icon-toggle" type="button" onClick={onCancel} aria-label="Close add task">
+        <button className="icon-toggle" type="button" onClick={onCancel} aria-label="Close composer">
           <X size={20} />
         </button>
       </section>
 
-      <label className="field-block">
-        <span>Title</span>
-        <input
-          value={title}
-          onChange={(event) => setTitle(event.target.value)}
-          placeholder="Take wood pile to the dump"
-          required
-          maxLength={160}
-          autoFocus
-        />
-      </label>
-
-      <label className="field-block">
-        <span>Notes</span>
-        <textarea
-          value={description}
-          onChange={(event) => setDescription(event.target.value)}
-          placeholder="Gate code, rough size, where it is, anything useful"
-          rows={4}
-          maxLength={4000}
-        />
-      </label>
-
-      <div className="photo-pickers">
-        <label className="photo-button">
-          <Camera size={20} />
-          <span>Camera</span>
+      <section className="quick-create-card">
+        <label className="field-block task-title-field">
+          <span>Task</span>
           <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            multiple
-            onChange={(event) => setFiles(addFiles(files, event.currentTarget.files))}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="Take wood pile to the dump"
+            required
+            maxLength={160}
+            autoFocus
           />
         </label>
-        <label className="photo-button">
-          <ImagePlus size={20} />
-          <span>Roll</span>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={(event) => setFiles(addFiles(files, event.currentTarget.files))}
+
+        <label className="field-block">
+          <span>Note</span>
+          <textarea
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="Optional context"
+            rows={3}
+            maxLength={4000}
           />
         </label>
-      </div>
 
-      {files.length ? (
-        <div className="file-row" aria-label="Selected photos">
-          {files.map((file, index) => (
-            <span key={`${file.name}-${index}`}>{file.name}</span>
-          ))}
-        </div>
-      ) : null}
+        <section className="photo-section" aria-label="Photos">
+          <span className="section-label">Photos</span>
+          <div className="photo-pickers">
+            <label className="photo-button">
+              <Camera size={20} />
+              <span>Camera</span>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                multiple
+                onChange={(event) => setFiles(addFiles(files, event.currentTarget.files))}
+              />
+            </label>
+            <label className="photo-button">
+              <ImagePlus size={20} />
+              <span>Roll</span>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(event) => setFiles(addFiles(files, event.currentTarget.files))}
+              />
+            </label>
+          </div>
 
-      <div className="field-grid">
-        <label className="field-block">
-          <span>Category</span>
-          <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
-            {bootstrap.categories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field-block">
-          <span>Assignee</span>
-          <select value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}>
-            {bootstrap.people.map((person) => (
-              <option key={person.id} value={person.id}>
-                {person.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+          {files.length ? (
+            <div className="file-row" aria-label="Selected photos">
+              {files.map((file, index) => (
+                <span key={`${file.name}-${index}`}>{file.name}</span>
+              ))}
+            </div>
+          ) : null}
+        </section>
 
-      <div className="priority-row" aria-label="Priority">
-        {(["low", "normal", "high", "urgent"] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            className={clsx("priority-chip", `priority-${value}`, priority === value && "is-selected")}
-            onClick={() => setPriority(value)}
-          >
-            {priorityLabels[value]}
-          </button>
-        ))}
-      </div>
+        <section className="details-section" aria-label="Details">
+          <span className="section-label">Details</span>
 
-      <label className="field-block">
-        <span>Due</span>
-        <input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
-      </label>
+          <div className="field-grid">
+            <label className="field-block">
+              <span>Category</span>
+              <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+                {bootstrap.categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field-block">
+              <span>For</span>
+              <select value={assigneeId} onChange={(event) => setAssigneeId(event.target.value)}>
+                {bootstrap.people.map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
 
-      <button className="primary-action" type="submit" disabled={submitting}>
-        <Plus size={20} />
-        <span>{submitting ? "Adding" : "Add task"}</span>
-      </button>
+          <div className="priority-field">
+            <span className="section-label">Priority</span>
+            <div className="priority-row" aria-label="Priority">
+              {(["low", "normal", "high", "urgent"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={clsx("priority-chip", `priority-${value}`, priority === value && "is-selected")}
+                  onClick={() => setPriority(value)}
+                >
+                  {priorityLabels[value]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="field-block">
+            <span>Due</span>
+            <input type="date" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
+          </label>
+
+          <section className="repeat-editor" aria-label="Repeat">
+            <label className="repeat-toggle">
+              <input type="checkbox" checked={repeats} onChange={(event) => setRepeats(event.target.checked)} />
+              <span>Repeat</span>
+            </label>
+            {repeats ? (
+              <div className="repeat-controls">
+                <label className="field-block">
+                  <span>Every</span>
+                  <input type="number" min="1" max="365" value={repeatEvery} onChange={(event) => setRepeatEvery(Number(event.target.value) || 1)} />
+                </label>
+                <label className="field-block">
+                  <span>Unit</span>
+                  <select value={repeatFrequency} onChange={(event) => setRepeatFrequency(event.target.value as RecurrenceFrequency)}>
+                    <option value="daily">Days</option>
+                    <option value="weekly">Weeks</option>
+                    <option value="monthly">Months</option>
+                  </select>
+                </label>
+                <label className="repeat-toggle">
+                  <input type="checkbox" checked={repeatEnds} onChange={(event) => setRepeatEnds(event.target.checked)} />
+                  <span>Ends</span>
+                </label>
+                {repeatEnds ? (
+                  <label className="field-block">
+                    <span>End date</span>
+                    <input type="date" value={repeatEndDate} onChange={(event) => setRepeatEndDate(event.target.value)} />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        </section>
+
+        <button className="primary-action" type="submit" disabled={submitting || !title.trim()}>
+          <Plus size={20} />
+          <span>{submitting ? "Adding" : "Add task"}</span>
+        </button>
+      </section>
     </form>
   );
 }
@@ -699,8 +906,7 @@ function TaskCard({
 }) {
   const done = task.status === "done";
   return (
-    <article className={clsx("task-card", `urgency-${task.urgency}`, justCompleted && "just-completed")} data-testid="task-card">
-      <span className="task-marker" style={{ backgroundColor: task.category.color }} />
+    <article className={clsx("task-card", justCompleted && "just-completed")} data-testid="task-card">
       <button
         className={clsx("complete-button", done && "is-done")}
         type="button"
@@ -714,14 +920,19 @@ function TaskCard({
         <span className="task-title">{task.title}</span>
         {task.description ? <span className="task-description">{task.description}</span> : null}
         <span className="task-meta">
-          <span className="category-dot" style={{ backgroundColor: task.category.color }} />
-          <span>{task.category.name}</span>
-          <span>{task.assignee?.name ?? "Unassigned"}</span>
-          {task.plannedFor ? <span>{plannedLabel(task.plannedFor)}</span> : null}
-          <span>{urgencyLabels[task.urgency]}</span>
-        </span>
-        <span className="task-meter">
-          <span className={`meter-fill priority-fill-${task.priority}`} />
+          <span className="task-pill category-pill" style={{ borderColor: task.category.color, color: task.category.color }}>
+            {task.category.name}
+          </span>
+          <span className="task-pill owner-pill">{task.assignee?.name ?? "Unassigned"}</span>
+          {task.createdBy ? <span className="task-pill creator-pill">Added by {task.createdBy.name}</span> : null}
+          <span className="task-pill timing-pill">{taskTimingLabel(task)}</span>
+          <span className={clsx("task-pill", "priority-pill", `task-priority-${task.priority}`)}>{priorityLabels[task.priority]}</span>
+          {task.recurringRule?.isActive ? (
+            <span className="task-pill repeat-pill">
+              <Repeat2 size={12} />
+              {recurrenceLabel(task.recurringRule)}
+            </span>
+          ) : null}
         </span>
       </button>
       {task.photos.length ? (
@@ -737,20 +948,20 @@ function TaskCard({
 }
 
 function TaskDetailSheet({
+  bootstrap,
   task,
   currentPersonId,
   busy: parentBusy,
-  planningDays,
   onClose,
   onArchive,
   onPlan,
   onRefresh,
   onError,
 }: {
+  bootstrap: Bootstrap;
   task: Task;
   currentPersonId: string;
   busy: boolean;
-  planningDays: PlanningDay[];
   onClose: () => void;
   onArchive: () => Promise<void>;
   onPlan: (plannedFor: string | null) => Promise<void>;
@@ -758,8 +969,65 @@ function TaskDetailSheet({
   onError: (message: string) => void;
 }) {
   const [note, setNote] = useState("");
-  const [splitText, setSplitText] = useState("");
   const [busy, setBusy] = useState(false);
+  const [repeats, setRepeats] = useState(Boolean(task.recurringRule?.isActive));
+  const [repeatEvery, setRepeatEvery] = useState(task.recurringRule?.interval ?? 1);
+  const [repeatFrequency, setRepeatFrequency] = useState<RecurrenceFrequency>(task.recurringRule?.frequency ?? "weekly");
+  const [repeatEnds, setRepeatEnds] = useState(Boolean(task.recurringRule?.endDate));
+  const [repeatEndDate, setRepeatEndDate] = useState(task.recurringRule?.endDate ?? "");
+
+  async function updateTask(
+    patch: Partial<Pick<Task, "categoryId" | "assigneeId" | "priority" | "dueAt">> & {
+      recurrence?:
+        | {
+            frequency: RecurrenceFrequency;
+            interval: number;
+            anchorDate: string;
+            endDate: string | null;
+          }
+        | null;
+    },
+  ) {
+    setBusy(true);
+    try {
+      await api(`/api/tasks/${task.id}`, {
+        method: "PATCH",
+        headers: {
+          "content-type": "application/json",
+          ...personHeaders(currentPersonId),
+        },
+        body: JSON.stringify(patch),
+      });
+      await onRefresh();
+    } catch (nextError) {
+      onError((nextError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveRecurrence(
+    nextRepeats = repeats,
+    overrides: Partial<{ frequency: RecurrenceFrequency; interval: number; ends: boolean; endDate: string }> = {},
+  ) {
+    const anchorDate = task.dueAt ? dateKey(new Date(task.dueAt)) : dateKey(new Date());
+    const nextEnds = overrides.ends ?? repeatEnds;
+    const nextEndDate = overrides.endDate ?? repeatEndDate;
+    if (!nextRepeats) {
+      await updateTask({ recurrence: null });
+      return;
+    }
+
+    await updateTask({
+      dueAt: task.dueAt ?? localDateToIso(anchorDate),
+      recurrence: {
+        frequency: overrides.frequency ?? repeatFrequency,
+        interval: overrides.interval ?? repeatEvery,
+        anchorDate: localDateToIso(anchorDate),
+        endDate: nextEnds && nextEndDate ? nextEndDate : null,
+      },
+    });
+  }
 
   async function submitNote(event: FormEvent) {
     event.preventDefault();
@@ -775,31 +1043,6 @@ function TaskDetailSheet({
         body: JSON.stringify({ body: note, authorPersonId: currentPersonId }),
       });
       setNote("");
-      await onRefresh();
-    } catch (nextError) {
-      onError((nextError as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function splitTask() {
-    const titles = splitText
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (titles.length < 2) return;
-    setBusy(true);
-    try {
-      await api(`/api/tasks/${task.id}/split`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...personHeaders(currentPersonId),
-        },
-        body: JSON.stringify({ titles }),
-      });
-      setSplitText("");
       await onRefresh();
     } catch (nextError) {
       onError((nextError as Error).message);
@@ -824,19 +1067,25 @@ function TaskDetailSheet({
         <div className="detail-chips">
           <span className={clsx("priority-chip", `priority-${task.priority}`, "is-selected")}>{priorityLabels[task.priority]}</span>
           <span>{task.assignee?.name ?? "Unassigned"}</span>
+          {task.createdBy ? <span>Added by {task.createdBy.name}</span> : null}
           {task.plannedFor ? <span>{plannedLabel(task.plannedFor)}</span> : null}
           <span>{urgencyLabels[task.urgency]}</span>
-          {task.dueAt ? <span>{formatDue(task.dueAt)}</span> : null}
+          {task.dueAt ? <span>Due {formatDueDate(task.dueAt)}</span> : null}
+          {task.recurringRule?.isActive ? (
+            <span className="repeat-chip">
+              <Repeat2 size={13} />
+              {recurrenceLabel(task.recurringRule)}
+            </span>
+          ) : null}
         </div>
 
-        <section className="plan-box" aria-label="Plan this task">
-          <div>
+        <details className="plan-box" aria-label="Plan this task" open={Boolean(task.plannedFor)}>
+          <summary>
             <CalendarDays size={18} />
-            <h3>Plan this</h3>
-            <p>{task.plannedFor ? `Currently ${plannedLabel(task.plannedFor).toLowerCase()}` : "Choose the day this will actually happen."}</p>
-          </div>
+            <span>{task.plannedFor ? plannedLabel(task.plannedFor) : "Plan for a day"}</span>
+          </summary>
           <div className="plan-chip-row">
-            {planningDays.map((day) => (
+            {nextSevenDays().map((day) => (
               <button
                 key={day.value}
                 className={clsx("plan-chip", task.plannedFor === day.value && "is-selected")}
@@ -862,6 +1111,132 @@ function TaskDetailSheet({
               </button>
             ) : null}
           </div>
+        </details>
+
+        <section className="edit-panel" aria-label="Edit task details">
+          <div className="field-grid">
+            <label className="field-block">
+              <span>Category</span>
+              <select value={task.categoryId} onChange={(event) => updateTask({ categoryId: event.target.value })} disabled={busy || parentBusy}>
+                {bootstrap.categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field-block">
+              <span>For</span>
+              <select value={task.assigneeId ?? "person_unassigned"} onChange={(event) => updateTask({ assigneeId: event.target.value })} disabled={busy || parentBusy}>
+                {bootstrap.people.map((person) => (
+                  <option key={person.id} value={person.id}>
+                    {person.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="priority-field">
+            <span className="section-label">Priority</span>
+            <div className="priority-row" aria-label="Edit priority">
+              {(["low", "normal", "high", "urgent"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={clsx("priority-chip", `priority-${value}`, task.priority === value && "is-selected")}
+                  onClick={() => updateTask({ priority: value })}
+                  disabled={busy || parentBusy}
+                >
+                  {priorityLabels[value]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="field-block">
+            <span>Due</span>
+            <input
+              type="date"
+              value={task.dueAt ? dateKey(new Date(task.dueAt)) : ""}
+              onChange={(event) => updateTask({ dueAt: event.target.value ? localDateToIso(event.target.value) : null })}
+              disabled={busy || parentBusy}
+            />
+          </label>
+
+          <section className="repeat-editor" aria-label="Repeat">
+            <label className="repeat-toggle">
+              <input
+                type="checkbox"
+                checked={repeats}
+                onChange={(event) => {
+                  setRepeats(event.target.checked);
+                  saveRecurrence(event.target.checked);
+                }}
+                disabled={busy || parentBusy}
+              />
+              <span>Repeat</span>
+            </label>
+            {repeats ? (
+              <div className="repeat-controls">
+                <label className="field-block">
+                  <span>Every</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="365"
+                    value={repeatEvery}
+                    onChange={(event) => setRepeatEvery(Number(event.target.value) || 1)}
+                    onBlur={() => saveRecurrence(true)}
+                    disabled={busy || parentBusy}
+                  />
+                </label>
+                <label className="field-block">
+                  <span>Unit</span>
+                  <select
+                    value={repeatFrequency}
+                    onChange={(event) => {
+                      const nextFrequency = event.target.value as RecurrenceFrequency;
+                      setRepeatFrequency(nextFrequency);
+                      saveRecurrence(true, { frequency: nextFrequency });
+                    }}
+                    disabled={busy || parentBusy}
+                  >
+                    <option value="daily">Days</option>
+                    <option value="weekly">Weeks</option>
+                    <option value="monthly">Months</option>
+                  </select>
+                </label>
+                <label className="repeat-toggle">
+                  <input
+                    type="checkbox"
+                    checked={repeatEnds}
+                    onChange={(event) => {
+                      setRepeatEnds(event.target.checked);
+                      if (!event.target.checked) {
+                        setRepeatEndDate("");
+                        saveRecurrence(true, { ends: false, endDate: "" });
+                      }
+                    }}
+                    disabled={busy || parentBusy}
+                  />
+                  <span>Ends</span>
+                </label>
+                {repeatEnds ? (
+                  <label className="field-block">
+                    <span>End date</span>
+                    <input
+                      type="date"
+                      value={repeatEndDate}
+                      onChange={(event) => setRepeatEndDate(event.target.value)}
+                      onBlur={() => saveRecurrence(true, { endDate: repeatEndDate })}
+                      disabled={busy || parentBusy}
+                    />
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
         </section>
 
         {task.photos.length ? (
@@ -880,7 +1255,7 @@ function TaskDetailSheet({
           {task.notes.length ? (
             task.notes.map((item) => (
               <p key={item.id}>
-                <span>{item.agentName ?? "House"}</span>
+                <span>{noteAuthorLabel(item, bootstrap.people)}</span>
                 {item.body}
               </p>
             ))
@@ -895,22 +1270,6 @@ function TaskDetailSheet({
             <Send size={18} />
           </button>
         </form>
-
-        <section className="split-box">
-          <div>
-            <Scissors size={18} />
-            <h3>Split</h3>
-          </div>
-          <textarea
-            value={splitText}
-            onChange={(event) => setSplitText(event.target.value)}
-            placeholder={"First smaller task\nSecond smaller task"}
-            rows={3}
-          />
-          <button type="button" onClick={splitTask} disabled={busy || splitText.split("\n").filter((line) => line.trim()).length < 2}>
-            Split task
-          </button>
-        </section>
 
         <button className="danger-action" type="button" onClick={onArchive} disabled={busy || parentBusy} aria-label="Remove task">
           <Trash2 size={18} />
@@ -969,12 +1328,6 @@ function addFiles(existing: File[], next: FileList | null) {
   return [...existing, ...Array.from(next)];
 }
 
-function summaryLine(tasks: Task[]) {
-  const urgent = tasks.filter((task) => task.status !== "done" && ["urgent", "overdue", "today"].includes(task.urgency)).length;
-  const open = tasks.filter((task) => task.status !== "done").length;
-  return urgent ? `${urgent} needs eyes, ${open} open` : `${open} open tasks`;
-}
-
 type PlanningDay = {
   value: string;
   label: string;
@@ -985,6 +1338,19 @@ type PlanningDay = {
 
 function isOpenTask(task: Task) {
   return task.status !== "done" && task.status !== "archived";
+}
+
+function filterByAssigneeScope(tasks: Task[], assigneeScopeId: string) {
+  if (assigneeScopeId === "all") return tasks;
+  return tasks.filter((task) => task.assigneeId === assigneeScopeId);
+}
+
+function noteAuthorLabel(note: TaskNote, people: Person[]) {
+  if (note.authorType === "human") {
+    return people.find((person) => person.id === note.authorPersonId)?.name ?? "Someone";
+  }
+  if (note.authorType === "agent") return note.agentName ?? "Agent";
+  return "System";
 }
 
 function nextSevenDays(now = new Date()): PlanningDay[] {
@@ -1008,6 +1374,18 @@ function dateKey(date: Date) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
+function dueDateKey(value: string) {
+  return dateKey(new Date(value));
+}
+
+function localDateToIso(value: string) {
+  return new Date(`${value}T12:00:00`).toISOString();
+}
+
+function isDateKeyInRange(value: string, start: string, end: string) {
+  return value >= start && value <= end;
+}
+
 function weekdayName(date: Date, weekday: "short" | "long") {
   return new Intl.DateTimeFormat(undefined, { weekday }).format(date);
 }
@@ -1026,32 +1404,29 @@ function plannedLabel(value: string) {
   return `Planned ${weekdayName(new Date(`${value}T12:00:00`), "short")}`;
 }
 
-function taskStats(tasks: Task[]) {
-  const open = tasks.filter((task) => task.status !== "done" && task.status !== "archived");
-  const done = tasks.filter((task) => task.status === "done");
-  const timeSensitive = open.filter((task) => task.urgency !== "normal");
-  const total = open.length + done.length;
-  const doneShare = total ? Math.round((done.length / total) * 100) : 0;
-  return {
-    open: open.length,
-    done: done.length,
-    timeSensitive: timeSensitive.length,
-    doneShare,
-  };
+function taskTimingLabel(task: Task) {
+  if (task.plannedFor) return plannedLabel(task.plannedFor);
+  if (task.dueAt) return `Due ${formatDueDate(task.dueAt)}`;
+  return urgencyLabels[task.urgency];
+}
+
+function recurrenceLabel(rule: NonNullable<Task["recurringRule"]>) {
+  if (rule.frequency === "daily") return rule.interval === 1 ? "Daily" : `Every ${rule.interval} days`;
+  if (rule.frequency === "weekly") return rule.interval === 1 ? "Weekly" : `Every ${rule.interval} weeks`;
+  if (rule.frequency === "monthly") return rule.interval === 1 ? "Monthly" : `Every ${rule.interval} months`;
+  return `Every ${rule.interval} days`;
 }
 
 function viewTitle(view: ViewMode, count: number) {
-  if (view === "today") return count ? `${count} worth seeing now` : "No urgent house stuff";
+  if (view === "today") return count ? `${count} scheduled or due` : "Nada";
   if (view === "done") return count ? `${count} checked off` : "Fresh slate";
-  if (view === "week") return count ? `${count} planned` : "Shape the week";
+  if (view === "week") return count ? `${count} scheduled or due` : "Nada";
   return `${count} open tasks`;
 }
 
-function formatDue(value: string) {
+function formatDueDate(value: string) {
   return new Intl.DateTimeFormat(undefined, {
     month: "short",
     day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
   }).format(new Date(value));
 }

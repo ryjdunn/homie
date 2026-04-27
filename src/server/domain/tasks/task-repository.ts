@@ -194,7 +194,10 @@ export class TaskRepository {
     return rule;
   }
 
-  async updateRecurringRule(taskId: string, input: Partial<Pick<NewRecurringRule, "nextDueAt" | "lastCompletedAt" | "isActive">>) {
+  async updateRecurringRule(
+    taskId: string,
+    input: Partial<Pick<NewRecurringRule, "frequency" | "interval" | "anchorDate" | "nextDueAt" | "endDate" | "lastCompletedAt" | "isActive">>,
+  ) {
     const [rule] = await this.conn.db
       .update(recurringRules)
       .set({

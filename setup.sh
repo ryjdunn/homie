@@ -8,7 +8,7 @@ INSTALL_SERVICE=1
 RUN_VALIDATION=0
 SKIP_BREW=0
 PORT_VALUE="${PORT:-3000}"
-HOST_VALUE="${HOSTNAME:-0.0.0.0}"
+HOST_VALUE="${HOMIE_HOST:-0.0.0.0}"
 DATABASE_URL_VALUE="${DATABASE_URL:-postgres://localhost:5432/homie}"
 UPLOAD_DIR_VALUE="${HOMIE_UPLOAD_DIR:-${ROOT}/data/uploads}"
 
@@ -16,8 +16,8 @@ usage() {
   cat <<'EOF'
 Usage: ./setup.sh [options]
 
-Sets up Homie on a Mac mini using Homebrew Postgres, Node, and a user-level
-launchd service. Defaults are safe for Tailscale LAN hosting.
+Sets up Homie on a Mac Studio/Mac mini using Homebrew Postgres, Node, and a
+user-level launchd service. Defaults are safe for Tailscale LAN hosting.
 
 Options:
   --no-service       Prepare the app but do not install/start launchd.
@@ -31,6 +31,7 @@ Environment overrides:
   DATABASE_URL       Default: postgres://localhost:5432/homie
   HOMIE_UPLOAD_DIR   Default: ./data/uploads
   HOMIE_AGENT_TOKEN  Default is generated into .env when missing.
+  HOMIE_HOST         Default: 0.0.0.0
 EOF
 }
 
@@ -74,7 +75,7 @@ log() {
 
 require_macos() {
   if [ "$(uname -s)" != "Darwin" ]; then
-    echo "setup.sh is intended for macOS/Mac mini. Use Docker or adapt scripts manually on other systems." >&2
+    echo "setup.sh is intended for macOS/Mac Studio/Mac mini. Use Docker or adapt scripts manually on other systems." >&2
     exit 1
   fi
 }
@@ -167,6 +168,7 @@ DATABASE_URL=${DATABASE_URL_VALUE}
 HOMIE_UPLOAD_DIR=${UPLOAD_DIR_VALUE}
 HOMIE_AGENT_TOKEN=${agent_token}
 HOMIE_DB_POOL_SIZE=10
+HOMIE_HOST=${HOST_VALUE}
 HOSTNAME=${HOST_VALUE}
 PORT=${PORT_VALUE}
 EOF
@@ -184,7 +186,7 @@ load_env_file() {
 
   DATABASE_URL_VALUE="${DATABASE_URL:-${DATABASE_URL_VALUE}}"
   UPLOAD_DIR_VALUE="${HOMIE_UPLOAD_DIR:-${UPLOAD_DIR_VALUE}}"
-  HOST_VALUE="${HOSTNAME:-${HOST_VALUE}}"
+  HOST_VALUE="${HOMIE_HOST:-${HOSTNAME:-${HOST_VALUE}}}"
   PORT_VALUE="${PORT:-${PORT_VALUE}}"
   mkdir -p "${UPLOAD_DIR_VALUE}" "${ROOT}/data/postgres" "${ROOT}/backups"
 }

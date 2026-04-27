@@ -18,9 +18,9 @@ describe("TaskService against Postgres", () => {
     const categories = await services.catalog.listCategories();
 
     expect(people.map((person) => person.slug)).toEqual(["unassigned", "ryan", "caroline"]);
-    expect(categories.map((category) => category.slug)).toContain("dump-run");
+    expect(categories.map((category) => category.slug)).toEqual(["house", "sell-donate", "errands", "kai"]);
     expect(await services.catalog.findPersonBySlug("ryan")).toMatchObject({ name: "Ryan" });
-    expect(await services.catalog.findCategoryBySlug("cleaning")).toMatchObject({ name: "Cleaning" });
+    expect(await services.catalog.findCategoryBySlug("sell-donate")).toMatchObject({ name: "Sell/Donate" });
   });
 
   it("creates, hydrates, filters, completes, and logs task events", async () => {
@@ -30,14 +30,14 @@ describe("TaskService against Postgres", () => {
         description: "Back left corner by the fence",
         priority: "urgent",
         dueAt: addDays(new Date("2026-04-26T12:00:00.000Z"), 1),
-        categoryId: "cat_dump_run",
+        categoryId: "cat_sell_donate",
         assigneeId: "person_ryan",
         createdById: "person_ryan",
       },
       { type: "human", personId: "person_ryan" },
     );
 
-    expect(task.category.name).toBe("Dump Run");
+    expect(task.category.name).toBe("Sell/Donate");
     expect(task.assignee?.name).toBe("Ryan");
     expect(task.urgency).toBe("urgent");
 
@@ -97,7 +97,7 @@ describe("TaskService against Postgres", () => {
     expect(reopened.completedAt).toBeNull();
   });
 
-  it("plans tasks into calendar days, filters them, clears them, and preserves plans on split children", async () => {
+  it("plans tasks into calendar days, filters them, and clears them", async () => {
     const task = await services.tasks.createTask(
       {
         title: "Plan towel reset",
@@ -105,7 +105,7 @@ describe("TaskService against Postgres", () => {
         priority: "normal",
         dueAt: null,
         plannedFor: "2026-04-29",
-        categoryId: "cat_cleaning",
+        categoryId: "cat_house",
         assigneeId: "person_caroline",
         createdById: "person_ryan",
       },
@@ -126,27 +126,6 @@ describe("TaskService against Postgres", () => {
     const cleared = await services.tasks.updateTask(task.id, { plannedFor: null }, { type: "human", personId: "person_caroline" });
     expect(cleared.plannedFor).toBeNull();
 
-    const parent = await services.tasks.createTask(
-      {
-        title: "Plan garage reset",
-        description: "",
-        priority: "high",
-        dueAt: null,
-        plannedFor: "2026-05-01",
-        categoryId: "cat_house",
-        assigneeId: "person_unassigned",
-        createdById: "person_ryan",
-      },
-      { type: "human", personId: "person_ryan" },
-    );
-
-    const split = await services.tasks.splitTask(parent.id, ["Stage boxes", "Sweep shelves"], {
-      type: "human",
-      personId: "person_ryan",
-    });
-
-    expect(split.children).toHaveLength(2);
-    expect(split.children.every((child) => child.plannedFor === "2026-05-01")).toBe(true);
   });
 
   it("supports exact status filters and archived inclusion", async () => {
@@ -184,7 +163,7 @@ describe("TaskService against Postgres", () => {
         description: "",
         priority: "normal",
         dueAt: null,
-        categoryId: "cat_admin",
+        categoryId: "cat_house",
         assigneeId: "person_caroline",
         createdById: "person_ryan",
       },
@@ -233,40 +212,15 @@ describe("TaskService against Postgres", () => {
     );
   });
 
-  it("splits a task into children while keeping the parent as context", async () => {
-    const task = await services.tasks.createTask(
-      {
-        title: "Clean the garage",
-        description: "",
-        priority: "high",
-        dueAt: null,
-        categoryId: "cat_house",
-        assigneeId: "person_unassigned",
-        createdById: "person_ryan",
-      },
-      { type: "human", personId: "person_ryan" },
-    );
-
-    const split = await services.tasks.splitTask(
-      task.id,
-      ["Break down boxes", "Sweep back wall", "Stage dump pile"],
-      { type: "human", personId: "person_ryan" },
-    );
-
-    expect(split.children).toHaveLength(3);
-    expect(split.children.every((child) => child.parentTaskId === task.id)).toBe(true);
-    expect(split.children.every((child) => child.priority === "high")).toBe(true);
-  });
-
   it("rolls recurring tasks forward into a fresh open task", async () => {
     const dueAt = new Date("2026-04-26T16:00:00.000Z");
     const task = await services.tasks.createTask(
       {
         title: "Wash sheets",
-        description: "",
+        description: "Use the linen closet backup set.",
         priority: "normal",
         dueAt,
-        categoryId: "cat_cleaning",
+        categoryId: "cat_house",
         assigneeId: "person_caroline",
         createdById: "person_ryan",
         recurrence: {
@@ -278,13 +232,27 @@ describe("TaskService against Postgres", () => {
       { type: "human", personId: "person_ryan" },
     );
 
+    await services.tasks.addNote(
+      task.id,
+      {
+        body: "This week's sheets are already in the laundry room.",
+        authorType: "human",
+        authorPersonId: "person_caroline",
+        agentName: null,
+      },
+      { type: "human", personId: "person_caroline" },
+    );
+
     const result = await services.tasks.completeTask(task.id, { type: "human", personId: "person_caroline" }, dueAt);
     expect(result.completed.status).toBe("done");
+    expect(result.completed.notes.map((note) => note.body)).toContain("This week's sheets are already in the laundry room.");
     expect(result.nextTask?.title).toBe("Wash sheets");
+    expect(result.nextTask?.description).toBe("Use the linen closet backup set.");
     expect(result.nextTask?.parentTaskId).toBe(task.id);
     expect(result.nextTask?.plannedFor).toBeNull();
     expect(result.nextTask?.dueAt?.toISOString()).toBe("2026-05-03T16:00:00.000Z");
     expect(result.nextTask?.recurringRule?.isActive).toBe(true);
+    expect(result.nextTask?.notes).toEqual([]);
   });
 
   it("rejects invalid service requests and missing resources clearly", async () => {
@@ -306,21 +274,5 @@ describe("TaskService against Postgres", () => {
     await expect(services.tasks.getTask("missing")).rejects.toMatchObject({ statusCode: 404 });
     await expect(services.tasks.getPhoto("missing")).rejects.toMatchObject({ statusCode: 404 });
 
-    const task = await services.tasks.createTask(
-      {
-        title: "Too small to split",
-        description: "",
-        priority: "normal",
-        dueAt: null,
-        categoryId: "cat_house",
-        assigneeId: "person_unassigned",
-        createdById: "person_ryan",
-      },
-      { type: "human", personId: "person_ryan" },
-    );
-
-    await expect(services.tasks.splitTask(task.id, ["Only child"], { type: "human", personId: "person_ryan" })).rejects.toMatchObject({
-      statusCode: 422,
-    });
   });
 });

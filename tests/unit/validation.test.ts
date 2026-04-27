@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   annotationSchema,
   createTaskSchema,
-  splitTaskSchema,
   taskFilterSchema,
   updateTaskSchema,
 } from "@/server/validation/task-schemas";
@@ -41,11 +40,6 @@ describe("API validation schemas", () => {
     expect(taskFilterSchema.parse({ plannedFor: "2026-04-27" }).plannedFor).toBe("2026-04-27");
     expect(() => taskFilterSchema.parse({ plannedFor: "tomorrow" })).toThrow();
     expect(taskFilterSchema.parse({}).timeSensitive).toBe(false);
-  });
-
-  it("rejects weak split payloads", () => {
-    expect(() => splitTaskSchema.parse({ titles: ["Only one"] })).toThrow();
-    expect(splitTaskSchema.parse({ titles: ["One", "Two"] }).titles).toHaveLength(2);
   });
 
   it("accepts structured agent annotation payloads", () => {

@@ -74,7 +74,6 @@ test.describe("real-world mobile UX and database validation", () => {
       priority: "Normal",
     });
 
-    await expect(page.getByRole("heading", { name: title })).toBeVisible();
     await withDb(async (sql) => {
       const rows = await sql`
         select title, status, priority, category_id, assignee_id
@@ -97,12 +96,11 @@ test.describe("real-world mobile UX and database validation", () => {
     await addTaskViaUi(page, {
       title,
       description: "Needs attention today.",
-      categoryId: "cat_dump_run",
+      categoryId: "cat_sell_donate",
       assigneeId: "person_ryan",
       priority: "Urgent",
       dueAt: localDateTimeInput(0, 18, 15),
     });
-    await page.getByRole("button", { name: "Close task detail" }).click();
     await page.getByRole("button", { name: "Today", exact: true }).click();
 
     await expect(taskCard(page, title)).toBeVisible();
@@ -119,7 +117,7 @@ test.describe("real-world mobile UX and database validation", () => {
     await addTaskViaUi(page, {
       title,
       description: "Photo-backed dump run task.",
-      categoryId: "cat_dump_run",
+      categoryId: "cat_sell_donate",
       assigneeId: "person_ryan",
       priority: "High",
       files: [
@@ -128,6 +126,8 @@ test.describe("real-world mobile UX and database validation", () => {
       ],
     });
 
+    await gotoAll(page);
+    await openTask(page, title);
     await expect(page.locator(".detail-sheet .photo-grid img")).toHaveCount(2);
 
     await withDb(async (sql) => {
@@ -151,14 +151,15 @@ test.describe("real-world mobile UX and database validation", () => {
     const title = uniqueTitle("E2E Caroline remembered", testInfo);
 
     await gotoReady(page);
-    await page.locator(".person-switch select").selectOption("person_caroline");
+    await setOwnerScope(page, "Caroline");
+    const personPicker = page.locator(".person-picker");
     await page.reload();
-    await expect(page.locator(".person-switch select")).toHaveValue("person_caroline");
+    await expect(personPicker).toHaveText("Caroline");
 
     await addTaskViaUi(page, {
       title,
       description: "Created while Caroline is selected.",
-      categoryId: "cat_cleaning",
+      categoryId: "cat_house",
       assigneeId: "person_caroline",
       priority: "Low",
     });
@@ -195,41 +196,13 @@ test.describe("real-world mobile UX and database validation", () => {
     });
   });
 
-  test("splits a large task into child tasks from the UI", async ({ page }, testInfo) => {
-    const title = uniqueTitle("E2E split garage", testInfo);
-    const childOne = uniqueTitle("E2E child boxes", testInfo);
-    const childTwo = uniqueTitle("E2E child sweep", testInfo);
-    const childThree = uniqueTitle("E2E child stage", testInfo);
-    await createTaskViaApi(page, { title, categoryId: "cat_house", assigneeId: "person_unassigned", priority: "high" });
-
-    await gotoAll(page);
-    await openTask(page, title);
-    await page.getByPlaceholder("First smaller task\nSecond smaller task").fill(`${childOne}\n${childTwo}\n${childThree}`);
-    await page.getByRole("button", { name: "Split task" }).click();
-    await page.getByRole("button", { name: "Close task detail" }).click();
-
-    await expect(taskCard(page, childOne)).toBeVisible();
-    await expect(taskCard(page, childTwo)).toBeVisible();
-    await expect(taskCard(page, childThree)).toBeVisible();
-
-    await withDb(async (sql) => {
-      const rows = await sql`
-        select child.title, child.parent_task_id, parent.title as parent_title
-        from tasks child
-        join tasks parent on parent.id = child.parent_task_id
-        where child.title in (${childOne}, ${childTwo}, ${childThree})
-        order by child.title
-      `;
-      expect(rows).toHaveLength(3);
-      expect(rows.every((row) => row.parent_title === title)).toBe(true);
-    });
-  });
-
   test("shows pre-planned household work in the next seven days view", async ({ page }) => {
     await gotoWeek(page);
 
     const week = page.getByLabel("Next 7 days", { exact: true });
-    await expect(week.getByTestId("week-day-card")).toHaveCount(7);
+    const plannedDayCount = await week.getByTestId("week-day-card").count();
+    expect(plannedDayCount).toBeGreaterThanOrEqual(2);
+    expect(plannedDayCount).toBeLessThanOrEqual(7);
     await expect(plannedTaskCard(page, "E2E seed: take old cardboard to recycling")).toBeVisible();
     await expect(plannedTaskCard(page, "E2E seed: wash guest towels")).toBeVisible();
     await expectNoHorizontalOverflow(page);
@@ -247,12 +220,13 @@ test.describe("real-world mobile UX and database validation", () => {
 
     await gotoAll(page);
     await openTask(page, title);
+    const detail = page.getByLabel("Task detail", { exact: true });
+    await detail.getByText("Plan for a day", { exact: true }).click();
     await page.getByRole("button", { name: `Plan ${title} for Tomorrow` }).click();
 
-    const detail = page.getByLabel("Task detail", { exact: true });
-    await expect(detail.getByText("Planned tomorrow", { exact: true })).toBeVisible();
+    await expect(detail.locator(".detail-chips").getByText("Planned tomorrow", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Close task detail" }).click();
-    await page.getByRole("button", { name: "Week", exact: true }).click();
+    await gotoWeek(page);
     await expect(plannedTaskCard(page, title)).toBeVisible();
 
     await withDb(async (sql) => {
@@ -269,7 +243,7 @@ test.describe("real-world mobile UX and database validation", () => {
     const title = uniqueTitle("E2E clear plan", testInfo);
     await createTaskViaApi(page, {
       title,
-      categoryId: "cat_admin",
+      categoryId: "cat_house",
       assigneeId: "person_ryan",
       plannedFor: localDateKey(2),
     });
@@ -298,12 +272,12 @@ test.describe("real-world mobile UX and database validation", () => {
     const title = uniqueTitle("E2E planned done", testInfo);
     await createTaskViaApi(page, {
       title,
-      categoryId: "cat_yard",
-      assigneeId: "person_caroline",
+      categoryId: "cat_house",
+      assigneeId: "person_ryan",
       plannedFor: localDateKey(0),
     });
 
-    await gotoWeek(page);
+    await gotoWeek(page, "Ryan");
     const card = plannedTaskCard(page, title);
     await expect(card).toBeVisible();
     await card.getByRole("button", { name: `Complete ${title}` }).click();
@@ -322,40 +296,6 @@ test.describe("real-world mobile UX and database validation", () => {
         completed_by_id: "person_ryan",
         planned_for: localDateKey(0),
       });
-    });
-  });
-
-  test("splitting a planned task keeps each child on the same day in Week", async ({ page }, testInfo) => {
-    const title = uniqueTitle("E2E planned split", testInfo);
-    const childOne = uniqueTitle("E2E planned child one", testInfo);
-    const childTwo = uniqueTitle("E2E planned child two", testInfo);
-    await createTaskViaApi(page, {
-      title,
-      categoryId: "cat_house",
-      assigneeId: "person_caroline",
-      priority: "high",
-      plannedFor: localDateKey(1),
-    });
-
-    await gotoAll(page);
-    await openTask(page, title);
-    await page.getByPlaceholder("First smaller task\nSecond smaller task").fill(`${childOne}\n${childTwo}`);
-    await page.getByRole("button", { name: "Split task" }).click();
-    await page.getByRole("button", { name: "Close task detail" }).click();
-    await page.getByRole("button", { name: "Week", exact: true }).click();
-
-    await expect(plannedTaskCard(page, childOne)).toBeVisible();
-    await expect(plannedTaskCard(page, childTwo)).toBeVisible();
-
-    await withDb(async (sql) => {
-      const rows = await sql`
-        select title, planned_for::text as planned_for
-        from tasks
-        where title in (${childOne}, ${childTwo})
-        order by title
-      `;
-      expect(rows).toHaveLength(2);
-      expect(rows.every((row) => row.planned_for === localDateKey(1))).toBe(true);
     });
   });
 
@@ -382,7 +322,7 @@ test.describe("real-world mobile UX and database validation", () => {
 
   test("reopens a completed task from the Done view", async ({ page }, testInfo) => {
     const title = uniqueTitle("E2E reopen", testInfo);
-    await createTaskViaApi(page, { title, categoryId: "cat_admin", assigneeId: "person_caroline" });
+    await createTaskViaApi(page, { title, categoryId: "cat_house", assigneeId: "person_caroline" });
 
     await gotoAll(page);
     await page.getByRole("button", { name: `Complete ${title}` }).click();
@@ -415,11 +355,11 @@ test.describe("real-world mobile UX and database validation", () => {
   test("filters by category without hiding matching household tasks", async ({ page }, testInfo) => {
     const dumpTitle = uniqueTitle("E2E category dump", testInfo);
     const houseTitle = uniqueTitle("E2E category house", testInfo);
-    await createTaskViaApi(page, { title: dumpTitle, categoryId: "cat_dump_run", assigneeId: "person_ryan" });
+    await createTaskViaApi(page, { title: dumpTitle, categoryId: "cat_sell_donate", assigneeId: "person_ryan" });
     await createTaskViaApi(page, { title: houseTitle, categoryId: "cat_house", assigneeId: "person_ryan" });
 
     await gotoAll(page);
-    await page.getByLabel("Category filter").selectOption("cat_dump_run");
+    await page.getByLabel("Category filter").selectOption("cat_sell_donate");
 
     await expect(taskCard(page, dumpTitle)).toBeVisible();
     await expect(taskCard(page, houseTitle)).toHaveCount(0);
@@ -428,8 +368,8 @@ test.describe("real-world mobile UX and database validation", () => {
   test("filters by assignee for Ryan and Caroline-specific work", async ({ page }, testInfo) => {
     const ryanTitle = uniqueTitle("E2E assignee Ryan", testInfo);
     const carolineTitle = uniqueTitle("E2E assignee Caroline", testInfo);
-    await createTaskViaApi(page, { title: ryanTitle, categoryId: "cat_yard", assigneeId: "person_ryan" });
-    await createTaskViaApi(page, { title: carolineTitle, categoryId: "cat_cleaning", assigneeId: "person_caroline" });
+    await createTaskViaApi(page, { title: ryanTitle, categoryId: "cat_house", assigneeId: "person_ryan" });
+    await createTaskViaApi(page, { title: carolineTitle, categoryId: "cat_house", assigneeId: "person_caroline" });
 
     await gotoAll(page);
     await page.getByLabel("Assignee filter").selectOption("person_caroline");
@@ -445,14 +385,14 @@ test.describe("real-world mobile UX and database validation", () => {
       title: urgentTitle,
       priority: "urgent",
       dueAt: isoFromLocalInput(localDateTimeInput(0, 20, 30)),
-      categoryId: "cat_admin",
+      categoryId: "cat_house",
       assigneeId: "person_ryan",
     });
     await createTaskViaApi(page, {
       title: normalTitle,
       priority: "normal",
       dueAt: isoFromLocalInput(localDateTimeInput(14, 10, 0)),
-      categoryId: "cat_admin",
+      categoryId: "cat_house",
       assigneeId: "person_ryan",
     });
 
@@ -471,7 +411,7 @@ test.describe("real-world mobile UX and database validation", () => {
       title,
       priority: "normal",
       dueAt: isoFromLocalInput(localDateTimeInput(30, 9, 0)),
-      categoryId: "cat_yard",
+      categoryId: "cat_house",
       assigneeId: "person_unassigned",
     });
 
@@ -490,7 +430,7 @@ test.describe("real-world mobile UX and database validation", () => {
     await createTaskViaApi(page, {
       title,
       description: "This deliberately long row should not blow up the mobile viewport.",
-      categoryId: "cat_dump_run",
+      categoryId: "cat_sell_donate",
       assigneeId: "person_ryan",
     });
 
@@ -507,7 +447,7 @@ test.describe("real-world mobile UX and database validation", () => {
       description: "Metadata should be visible before someone acts on the task.",
       priority: "high",
       dueAt: isoFromLocalInput(localDateTimeInput(1, 11, 45)),
-      categoryId: "cat_cleaning",
+      categoryId: "cat_house",
       assigneeId: "person_caroline",
     });
 
@@ -516,9 +456,10 @@ test.describe("real-world mobile UX and database validation", () => {
 
     await expect(page.getByRole("heading", { name: title })).toBeVisible();
     const detail = page.getByLabel("Task detail", { exact: true });
-    await expect(detail.getByText("Cleaning", { exact: true })).toBeVisible();
-    await expect(detail.getByText("Caroline", { exact: true })).toBeVisible();
-    await expect(detail.getByText("High", { exact: true })).toBeVisible();
+    const chips = detail.locator(".detail-chips");
+    await expect(detail.locator(".detail-header .eyebrow")).toHaveText("House");
+    await expect(chips.getByText("Caroline", { exact: true })).toBeVisible();
+    await expect(chips.getByText("High", { exact: true })).toBeVisible();
     await expect(detail.getByText("Metadata should be visible")).toBeVisible();
   });
 
@@ -526,36 +467,18 @@ test.describe("real-world mobile UX and database validation", () => {
     const markerTitle = uniqueTitle("E2E should not exist", testInfo);
     await gotoReady(page);
     await page.getByRole("button", { name: "Add task" }).click();
-    await page.getByLabel("Notes").fill(markerTitle);
-    await page.locator("form").getByRole("button", { name: "Add task", exact: true }).click();
-
-    await expect(page.getByLabel("Title")).toBeVisible();
-    const valueMissing = await page.getByLabel("Title").evaluate((node) => (node as HTMLInputElement).validity.valueMissing);
-    expect(valueMissing).toBe(true);
+    const addPanel = page.locator("form.add-panel");
+    await addPanel.getByRole("textbox", { name: "Note" }).fill(markerTitle);
+    await expect(addPanel.getByRole("button", { name: "Add task", exact: true })).toBeDisabled();
     await withDb(async (sql) => {
       const rows = await sql`select id from tasks where title = ${markerTitle}`;
       expect(rows).toHaveLength(0);
     });
   });
 
-  test("split controls stay disabled until there are at least two child tasks", async ({ page }, testInfo) => {
-    const title = uniqueTitle("E2E split disabled", testInfo);
-    await createTaskViaApi(page, { title, categoryId: "cat_house", assigneeId: "person_ryan" });
-
-    await gotoAll(page);
-    await openTask(page, title);
-
-    const splitButton = page.getByRole("button", { name: "Split task" });
-    await expect(splitButton).toBeDisabled();
-    await page.getByPlaceholder("First smaller task\nSecond smaller task").fill("Only one child");
-    await expect(splitButton).toBeDisabled();
-    await page.getByPlaceholder("First smaller task\nSecond smaller task").fill("First child\nSecond child");
-    await expect(splitButton).toBeEnabled();
-  });
-
   test("note submission is disabled when empty and enabled when useful", async ({ page }, testInfo) => {
     const title = uniqueTitle("E2E note disabled", testInfo);
-    await createTaskViaApi(page, { title, categoryId: "cat_admin", assigneeId: "person_ryan" });
+    await createTaskViaApi(page, { title, categoryId: "cat_house", assigneeId: "person_ryan" });
 
     await gotoAll(page);
     await openTask(page, title);
@@ -573,7 +496,7 @@ test.describe("real-world mobile UX and database validation", () => {
       title,
       priority: "normal",
       dueAt,
-      categoryId: "cat_cleaning",
+      categoryId: "cat_house",
       assigneeId: "person_caroline",
       recurrence: {
         frequency: "weekly",
@@ -622,7 +545,7 @@ test.describe("real-world mobile UX and database validation", () => {
     await addTaskViaUi(page, {
       title,
       description: "Task created from the UX, then inspected by the agent API.",
-      categoryId: "cat_admin",
+      categoryId: "cat_house",
       assigneeId: "person_unassigned",
       priority: "High",
     });
@@ -677,9 +600,10 @@ async function gotoAll(page: Page) {
   await page.getByRole("button", { name: "All", exact: true }).click();
 }
 
-async function gotoWeek(page: Page) {
+async function gotoWeek(page: Page, scope: "Ryan" | "Caroline" | "All" = "All") {
   await gotoReady(page);
   await page.getByRole("button", { name: "Week", exact: true }).click();
+  await setOwnerScope(page, scope);
 }
 
 function taskCard(page: Page, title: string) {
@@ -711,19 +635,30 @@ async function addTaskViaUi(
 ) {
   await gotoReady(page);
   await page.getByRole("button", { name: "Add task" }).click();
-  await page.getByLabel("Title").fill(input.title);
-  await page.getByLabel("Notes").fill(input.description ?? "");
-  await page.getByLabel("Category").selectOption(input.categoryId);
-  await page.getByLabel("Assignee").selectOption(input.assigneeId);
-  await page.getByRole("button", { name: input.priority }).click();
+  const addPanel = page.locator("form.add-panel");
+  await addPanel.getByRole("textbox", { name: "Task" }).fill(input.title);
+  await addPanel.getByRole("textbox", { name: "Note" }).fill(input.description ?? "");
+  await addPanel.getByLabel("Category").selectOption(input.categoryId);
+  await addPanel.getByLabel("For").selectOption(input.assigneeId);
+  await addPanel.getByRole("button", { name: input.priority }).click();
   if (input.dueAt) {
-    await page.getByLabel("Due").fill(input.dueAt);
+    await addPanel.getByLabel("Due").fill(input.dueAt.slice(0, 10));
   }
   if (input.files?.length) {
-    await page.locator('input[type="file"]').nth(1).setInputFiles(input.files);
+    await addPanel.locator('input[type="file"]').nth(1).setInputFiles(input.files);
   }
-  await page.locator("form").getByRole("button", { name: "Add task", exact: true }).click();
-  await expect(page.getByRole("heading", { name: input.title })).toBeVisible();
+  await addPanel.getByRole("button", { name: "Add task", exact: true }).click();
+  await expect(addPanel).toHaveCount(0);
+}
+
+async function setOwnerScope(page: Page, label: "Ryan" | "Caroline" | "All") {
+  const personPicker = page.locator(".person-picker");
+  await expect(personPicker).toBeVisible();
+  for (let index = 0; index < 4; index += 1) {
+    if ((await personPicker.innerText()).trim() === label) return;
+    await personPicker.click();
+  }
+  await expect(personPicker).toHaveText(label);
 }
 
 async function createTaskViaApi(page: Page, input: TaskInput) {

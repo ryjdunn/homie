@@ -1,8 +1,8 @@
 # Homie
 
-Homie is a mobile-first household task board for Ryan and Caroline. It is built for quick phone use: add tasks, attach photos from camera or camera roll, assign work, set priority and optional due dates, plan tasks into the next seven days, add notes, split tasks, and check things off with a satisfying flow.
+Homie is a mobile-first household task board for Ryan and Caroline. It is tuned for quick phone use: add a task, attach photos, assign it, pick a priority, optionally set a due date, plan it onto a day, add notes, and check it off.
 
-The project is designed to run locally on a MacBook during development and later on a Mac mini over Tailscale.
+The app is built to run locally during development and as a small always-on service on a Mac Studio or Mac mini, ideally reachable from phones over Tailscale.
 
 ## Stack
 
@@ -11,66 +11,134 @@ The project is designed to run locally on a MacBook during development and later
 - Drizzle ORM schema types with SQL migrations
 - Vitest for domain and integration tests
 - Playwright for mobile browser workflow tests
-- Native Mac mini runtime via Homebrew Postgres and `launchd`
-- Docker Compose as an optional alternate server runtime
+- Native macOS runtime through Homebrew Postgres and a user-level `launchd` service
+- Optional Docker Compose runtime for non-macOS or containerized installs
+
+## Current Product Model
+
+People:
+
+- Ryan
+- Caroline
+- Unassigned
+
+Categories:
+
+- House
+- Sell/Donate
+- Errands
+- Kai
+
+Task timing:
+
+- `planned_for` is a date-only schedule slot. If a task is planned, Today and Week place it in the Scheduled section and ignore its due date for board placement.
+- `due_at` is a date-only obligation marker in the UI. If a task is not planned but is due today/this week, Today and Week place it in the Due section.
+- Tasks without a plan or due date stay out of Today/Week and remain visible in All.
+
+Recurring tasks:
+
+- A recurring task can repeat daily, weekly, or monthly with a custom interval such as every 2 weeks.
+- Recurrence can run forever or stop at an end date.
+- Completing a recurring task creates the next open occurrence and deactivates recurrence on the completed occurrence.
+- Notes added after creation stay on the specific occurrence where they were written; they do not copy forward through the series.
+
+More behavior notes live in [docs/homie-behavior.md](./docs/homie-behavior.md).
 
 ## Local Development
 
+First-time setup:
+
 ```bash
 bash scripts/bootstrap-dev.sh
+```
+
+Run the local dev server:
+
+```bash
 bash scripts/dev.sh
 ```
 
-The dev script starts Homebrew Postgres, prepares the database, and serves Homie at:
+The dev script starts Homebrew Postgres, prepares `homie_dev`, and serves Homie on all local interfaces. By default Next chooses port `3000`; if you want the shared side-browser/Tailscale port used during this build, run:
 
-```text
-http://localhost:3000
+```bash
+PORT=3100 DATABASE_URL=postgres://localhost:5432/homie_dev npm run dev -- --hostname 0.0.0.0
 ```
 
-For the dedicated test server:
+Dedicated Playwright dev server:
 
 ```bash
 npm run dev:test
 ```
 
-## Mac Mini Setup
+## Mac Studio Setup
 
-The recommended Mac mini setup is native Homebrew Postgres plus a user-level `launchd` service:
+The recommended Mac Studio setup is native Homebrew Postgres plus a user-level `launchd` service:
 
 ```bash
 ./setup.sh
 ```
 
-That script installs/checks dependencies, writes `.env` if needed, prepares Postgres, builds the app, installs `~/Library/LaunchAgents/com.ryandunn.homie.plist`, starts Homie on `0.0.0.0:3000`, and runs a healthcheck.
+That script checks dependencies, writes `.env` if needed, prepares Postgres, builds the app, installs `~/Library/LaunchAgents/com.ryandunn.homie.plist`, starts Homie on `0.0.0.0:3000`, and verifies `/api/health`.
 
-Detailed instructions live in [docs/mac-mini-setup.md](./docs/mac-mini-setup.md).
+Detailed instructions live in [docs/mac-mini-setup.md](./docs/mac-mini-setup.md). Despite the historical filename, it covers both Mac Studio and Mac mini.
+
+Useful install variants:
+
+```bash
+./setup.sh --no-service
+./setup.sh --validate
+./setup.sh --port 3100
+```
+
+## Tailscale
+
+For a quick dev share to a phone on the same tailnet:
+
+```bash
+PORT=3100 DATABASE_URL=postgres://localhost:5432/homie_dev npm run dev -- --hostname 0.0.0.0
+tailscale serve --bg 3100
+tailscale serve status
+```
+
+If Next blocks dev resources for the Tailscale hostname, add that hostname to `allowedDevOrigins` in [next.config.ts](./next.config.ts) and restart the dev server.
+
+For the Mac Studio production service, use the host and port printed by `./setup.sh`, or put Tailscale Serve in front of the configured port:
+
+```bash
+tailscale serve --bg 3000
+```
+
+Disable Tailscale Serve later with:
+
+```bash
+tailscale serve --https=443 off
+```
 
 ## Validation
 
-Run the full local proof suite:
+Fast local proof:
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+```
+
+Full local proof:
 
 ```bash
 npm run validate:local
 ```
 
-That command prepares local Postgres databases, runs typecheck, lint, coverage tests, production build, and Playwright tests across mobile-sized and desktop viewports.
+`validate:local` prepares local Postgres databases, runs typecheck, lint, coverage tests, a production build, and Playwright tests across mobile-sized and desktop viewports.
 
-For the real-world UX/browser suite by itself:
+Run the real-world browser suite by itself:
 
 ```bash
 npm run test:e2e:real-world
 ```
 
-That suite drives the UI against `homie_e2e`, seeded household data, real uploads, and direct Postgres verification. Details live in [docs/real-world-e2e.md](./docs/real-world-e2e.md).
-
-Current coverage target is intentionally high for the backend/domain layer:
-
-```text
-Statements: 85% minimum
-Branches:   80% minimum
-Functions:  85% minimum
-Lines:      85% minimum
-```
+Details live in [docs/real-world-e2e.md](./docs/real-world-e2e.md).
 
 ## Data Model
 
@@ -85,26 +153,26 @@ Core tables:
 - `recurring_rules`
 - `agent_annotations`
 
-Starter people:
+Important task fields:
 
-- Ryan
-- Caroline
-- Unassigned
-
-Starter categories:
-
-- House
-- Cleaning
-- Yard
-- Errands
-- Dump Run
-- Admin
-
-Tasks have both `due_at` and `planned_for`. `due_at` means time-sensitive obligation; `planned_for` is a date-only planning field for “I intend to do this on Wednesday,” which powers the Week view.
+- `assignee_id`: who owns the work
+- `created_by_id`: who added it
+- `due_at`: obligation date, shown as a date in the UI
+- `planned_for`: scheduled board date
+- `parent_task_id`: previous occurrence for recurring rollover
 
 ## API
 
-Human UI routes live under `/api/tasks`, `/api/bootstrap`, and `/api/photos`.
+Human UI routes live under:
+
+- `/api/bootstrap`
+- `/api/tasks`
+- `/api/tasks/:id`
+- `/api/tasks/:id/notes`
+- `/api/tasks/:id/photos`
+- `/api/tasks/:id/complete`
+- `/api/tasks/:id/reopen`
+- `/api/photos/:id`
 
 Agent-facing routes live under `/api/agent/*` and are documented in [docs/agent-api.md](./docs/agent-api.md).
 
@@ -122,24 +190,7 @@ Runtime files are intentionally outside Git:
 - `data/uploads`
 - `backups`
 - `.env`
-
-Recommended Mac mini bootstrap:
-
-```bash
-./setup.sh
-```
-
-Run without installing the `launchd` service:
-
-```bash
-./setup.sh --no-service
-```
-
-Run the production server manually:
-
-```bash
-npm run start:mac-mini
-```
+- `.homie/*`
 
 Optional Docker Compose bootstrap:
 
@@ -147,7 +198,7 @@ Optional Docker Compose bootstrap:
 bash scripts/bootstrap-server.sh
 ```
 
-Optional Docker Compose deploy after pulling a new GitHub revision:
+Optional Docker Compose deploy after pulling a new Git revision:
 
 ```bash
 bash scripts/deploy.sh

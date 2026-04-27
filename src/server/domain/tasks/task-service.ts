@@ -109,6 +109,7 @@ export class TaskService {
         interval: input.recurrence.interval,
         anchorDate: toDateOnly(input.recurrence.anchorDate),
         nextDueAt: input.dueAt ?? input.recurrence.anchorDate,
+        endDate: input.recurrence.endDate ?? null,
         lastCompletedAt: null,
         isActive: true,
       });
@@ -118,8 +119,9 @@ export class TaskService {
   }
 
   async updateTask(id: string, input: UpdateTaskInput, actor: TaskActor) {
-    await this.ensureTask(id);
-    const patch: UpdateTaskInput = { ...input };
+    const existing = await this.getTask(id);
+    const { recurrence, ...taskPatch } = input;
+    const patch = { ...taskPatch };
 
     if (patch.title !== undefined) {
       patch.title = cleanText(patch.title, "Title", 160);
@@ -134,11 +136,39 @@ export class TaskService {
       throw notFound("Task not found");
     }
 
+    if (recurrence !== undefined) {
+      if (recurrence === null) {
+        if (existing.recurringRule) {
+          await this.repo.updateRecurringRule(id, { isActive: false });
+        }
+      } else if (existing.recurringRule) {
+        await this.repo.updateRecurringRule(id, {
+          frequency: recurrence.frequency,
+          interval: recurrence.interval,
+          anchorDate: toDateOnly(recurrence.anchorDate),
+          nextDueAt: task.dueAt ?? recurrence.anchorDate,
+          endDate: recurrence.endDate ?? null,
+          isActive: true,
+        });
+      } else {
+        await this.repo.addRecurringRule({
+          taskId: id,
+          frequency: recurrence.frequency,
+          interval: recurrence.interval,
+          anchorDate: toDateOnly(recurrence.anchorDate),
+          nextDueAt: task.dueAt ?? recurrence.anchorDate,
+          endDate: recurrence.endDate ?? null,
+          lastCompletedAt: null,
+          isActive: true,
+        });
+      }
+    }
+
     await this.repo.addEvent({
       taskId: id,
       ...actorFields(actor),
       eventType: "updated",
-      payload: patch,
+      payload: input,
     });
 
     return this.getTask(id);
@@ -178,45 +208,54 @@ export class TaskService {
         completedAt,
       );
 
-      const child = await this.repo.createTask({
-        title: existing.title,
-        description: existing.description,
-        status: "active",
-        priority: existing.priority,
-        dueAt: nextDueAt,
-        plannedFor: null,
-        categoryId: existing.categoryId,
-        assigneeId: existing.assigneeId,
-        createdById: existing.createdById,
-        completedAt: null,
-        completedById: null,
-        parentTaskId: existing.id,
-      });
+      if (existing.recurringRule.endDate && toDateOnly(nextDueAt) > existing.recurringRule.endDate) {
+        await this.repo.updateRecurringRule(existing.id, {
+          lastCompletedAt: completedAt,
+          nextDueAt,
+          isActive: false,
+        });
+      } else {
+        const child = await this.repo.createTask({
+          title: existing.title,
+          description: existing.description,
+          status: "active",
+          priority: existing.priority,
+          dueAt: nextDueAt,
+          plannedFor: null,
+          categoryId: existing.categoryId,
+          assigneeId: existing.assigneeId,
+          createdById: existing.createdById,
+          completedAt: null,
+          completedById: null,
+          parentTaskId: existing.id,
+        });
 
-      await this.repo.updateRecurringRule(existing.id, {
-        lastCompletedAt: completedAt,
-        nextDueAt,
-        isActive: false,
-      });
+        await this.repo.updateRecurringRule(existing.id, {
+          lastCompletedAt: completedAt,
+          nextDueAt,
+          isActive: false,
+        });
 
-      await this.repo.addRecurringRule({
-        taskId: child.id,
-        frequency: existing.recurringRule.frequency,
-        interval: existing.recurringRule.interval,
-        anchorDate: toDateOnly(nextDueAt),
-        nextDueAt,
-        lastCompletedAt: null,
-        isActive: true,
-      });
+        await this.repo.addRecurringRule({
+          taskId: child.id,
+          frequency: existing.recurringRule.frequency,
+          interval: existing.recurringRule.interval,
+          anchorDate: toDateOnly(nextDueAt),
+          nextDueAt,
+          endDate: existing.recurringRule.endDate,
+          lastCompletedAt: null,
+          isActive: true,
+        });
 
-      await this.repo.addEvent({
-        taskId: existing.id,
-        ...actorEvent,
-        eventType: "recurrence_scheduled",
-        payload: { nextTaskId: child.id, nextDueAt: nextDueAt.toISOString() },
-      });
+        await this.repo.addEvent({
+          taskId: existing.id,
+          ...actorEvent,
+          eventType: "recurrence_scheduled",
+          payload: { nextTaskId: child.id, nextDueAt: nextDueAt.toISOString() },
+        });
 
-      nextTask = await this.getTask(child.id, completedAt);
+        nextTask = await this.getTask(child.id, completedAt);
+      }
     }
 
     return {
@@ -239,45 +278,6 @@ export class TaskService {
       payload: {},
     });
     return this.getTask(id);
-  }
-
-  async splitTask(id: string, childTitles: string[], actor: TaskActor) {
-    const parent = await this.getTask(id);
-    const cleanedTitles = childTitles.map((title) => cleanText(title, "Child task title", 160));
-    if (cleanedTitles.length < 2) {
-      throw new AppError("Split needs at least two child tasks", 422, "validation_error");
-    }
-
-    const children: TaskWithContext[] = [];
-    for (const title of cleanedTitles) {
-      const child = await this.repo.createTask({
-        title,
-        description: "",
-        status: "active",
-        priority: parent.priority,
-        dueAt: parent.dueAt,
-        plannedFor: parent.plannedFor,
-        categoryId: parent.categoryId,
-        assigneeId: parent.assigneeId,
-        createdById: parent.createdById,
-        completedAt: null,
-        completedById: null,
-        parentTaskId: parent.id,
-      });
-      children.push(await this.getTask(child.id));
-    }
-
-    await this.repo.addEvent({
-      taskId: id,
-      ...actorFields(actor),
-      eventType: "split",
-      payload: { childTaskIds: children.map((child) => child.id) },
-    });
-
-    return {
-      parent: await this.getTask(id),
-      children,
-    };
   }
 
   async addNote(id: string, input: AddNoteInput, actor: TaskActor) {
@@ -392,6 +392,7 @@ export class TaskService {
       return {
         ...task,
         assignee: task.assigneeId ? peopleById.get(task.assigneeId) ?? null : null,
+        createdBy: task.createdById ? peopleById.get(task.createdById) ?? null : null,
         category,
         photos: photosByTask.get(task.id) ?? [],
         notes: notesByTask.get(task.id) ?? [],

@@ -40,6 +40,7 @@ export const createTaskSchema = z.object({
       frequency: z.enum(["daily", "weekly", "every_n_days", "monthly"]),
       interval: z.number().int().min(1).max(365).default(1),
       anchorDate: dateInput,
+      endDate: dateOnlyInput.nullish(),
     })
     .optional(),
 });
@@ -53,6 +54,15 @@ export const updateTaskSchema = z.object({
   plannedFor: dateOnlyInput.nullable().optional(),
   categoryId: z.string().min(1).optional(),
   assigneeId: z.string().min(1).nullable().optional(),
+  recurrence: z
+    .object({
+      frequency: z.enum(["daily", "weekly", "every_n_days", "monthly"]),
+      interval: z.number().int().min(1).max(365).default(1),
+      anchorDate: dateInput,
+      endDate: dateOnlyInput.nullish(),
+    })
+    .nullable()
+    .optional(),
 });
 
 export const taskFilterSchema = z.object({
@@ -70,10 +80,6 @@ export const taskFilterSchema = z.object({
 export const noteSchema = z.object({
   body: z.string().min(1).max(4000),
   authorPersonId: z.string().optional().default("person_ryan"),
-});
-
-export const splitTaskSchema = z.object({
-  titles: z.array(z.string().min(1).max(160)).min(2).max(20),
 });
 
 export const annotationSchema = z.object({
