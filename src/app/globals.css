@@ -609,7 +609,7 @@ textarea:focus-visible {
   position: relative;
   display: grid;
   grid-column: 1;
-  margin-top: -3px;
+  margin-top: -7px;
   width: 32px;
   height: 32px;
   place-items: center;
