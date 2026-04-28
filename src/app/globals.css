@@ -92,9 +92,42 @@ textarea:focus-visible {
   place-items: center;
 }
 
+.pull-refresh {
+  position: fixed;
+  top: calc(2px + env(safe-area-inset-top));
+  left: 50%;
+  z-index: 25;
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgb(210 225 246 / 86%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 88%);
+  color: var(--hero);
+  opacity: 0;
+  pointer-events: none;
+  box-shadow: 0 10px 22px rgb(22 72 132 / 14%);
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.pull-refresh.is-visible {
+  opacity: 1;
+}
+
+.pull-refresh.is-refreshing svg {
+  animation: homie-spin 760ms linear infinite;
+}
+
+@keyframes homie-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .app-hero {
   margin: 0 -22px;
-  padding: calc(52px + env(safe-area-inset-top)) 22px 10px;
+  padding: calc(36px + env(safe-area-inset-top)) 22px 8px;
   color: white;
   background:
     radial-gradient(circle at 50% 46%, rgb(117 216 255 / 34%), transparent 34%),
@@ -117,7 +150,7 @@ textarea:focus-visible {
 }
 
 .top-bar {
-  min-height: 48px;
+  min-height: 42px;
   justify-content: center;
 }
 
@@ -169,11 +202,11 @@ textarea:focus-visible {
 .mode-tabs {
   display: flex;
   width: min(100%, 344px);
-  height: 58px;
+  height: 54px;
   gap: 0;
   align-items: center;
   justify-content: center;
-  margin: 26px auto 0;
+  margin: 16px auto 0;
   overflow-x: auto;
   padding: 5px 0;
   border: 1px solid transparent;
@@ -686,6 +719,26 @@ textarea:focus-visible {
   color: var(--hero);
 }
 
+.owner-pill.person-caroline,
+.detail-chips .detail-person-pill.person-caroline {
+  border-color: rgb(57 167 102 / 26%);
+  background: #eafaf1;
+  color: #177245;
+}
+
+.owner-pill.person-ryan,
+.detail-chips .detail-person-pill.person-ryan {
+  border-color: rgb(224 126 54 / 26%);
+  background: #fff1e6;
+  color: #b85b18;
+}
+
+.owner-pill.person-unassigned,
+.detail-chips .detail-person-pill.person-unassigned {
+  background: #f4f7fc;
+  color: var(--ink-soft);
+}
+
 .creator-pill {
   background: #f6f8fc;
   color: var(--ink-soft);
@@ -714,6 +767,18 @@ textarea:focus-visible {
 .task-priority-urgent {
   background: #fff1f2;
   color: var(--danger);
+}
+
+.photo-indicator {
+  width: 26px;
+  padding: 0;
+  background: #eaf4ff;
+  color: var(--hero);
+}
+
+.photo-indicator svg {
+  width: 13px;
+  height: 13px;
 }
 
 .repeat-pill,
@@ -944,21 +1009,28 @@ textarea:focus-visible {
   inset: 0;
   z-index: 30;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   background: rgb(17 28 69 / 42%);
-  padding: 24px var(--space-3);
+  padding: calc(58px + env(safe-area-inset-top)) var(--space-3) 24px;
 }
 
 .detail-sheet {
   width: min(100%, 390px);
-  max-height: calc(100dvh - 48px);
+  max-height: calc(100dvh - 82px - env(safe-area-inset-top));
   overflow-y: auto;
   border: 1px solid rgb(223 231 243 / 90%);
   border-radius: 24px;
   background: var(--surface);
   box-shadow: var(--shadow);
   padding: var(--space-4);
+}
+
+.detail-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-2);
+  align-items: center;
 }
 
 .detail-header h2 {
@@ -1066,10 +1138,40 @@ textarea:focus-visible {
   margin-bottom: var(--space-3);
 }
 
+.photo-tile {
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-soft);
+}
+
 .photo-grid img {
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 14px;
+  border-radius: 0;
+}
+
+.photo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: calc(48px + env(safe-area-inset-top)) 18px calc(32px + env(safe-area-inset-bottom));
+  border: 0;
+  background: rgb(17 28 69 / 76%);
+}
+
+.photo-lightbox img {
+  display: block;
+  max-width: min(100%, 720px);
+  max-height: 78dvh;
+  object-fit: contain;
+  border-radius: 18px;
+  background: var(--surface-soft);
+  box-shadow: 0 22px 58px rgb(0 0 0 / 28%);
 }
 
 .detail-description {
@@ -1147,16 +1249,32 @@ textarea:focus-visible {
 
 .plan-box summary {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
   column-gap: var(--space-2);
   align-items: center;
-  min-height: 46px;
-  padding: 0 var(--space-3);
+  min-height: 58px;
+  padding: 0 24px;
   color: var(--hero);
   cursor: pointer;
   font-size: var(--text-md);
   font-weight: var(--weight-label);
+  line-height: 1;
   list-style: none;
+}
+
+.plan-box[open] summary {
+  min-height: 52px;
+}
+
+.plan-box summary svg,
+.plan-box summary span {
+  align-self: center;
+}
+
+.plan-box summary span {
+  display: inline-flex;
+  min-height: 1lh;
+  align-items: center;
 }
 
 .plan-box summary::-webkit-details-marker {

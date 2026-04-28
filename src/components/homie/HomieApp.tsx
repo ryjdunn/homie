@@ -10,15 +10,17 @@ import {
   ImagePlus,
   Inbox,
   ListFilter,
+  Pencil,
   Plus,
+  RefreshCw,
   Repeat2,
   Send,
   Trash2,
   Undo2,
   X,
 } from "lucide-react";
-import type { FormEvent, ReactNode } from "react";
-import { startTransition, useEffect, useMemo, useState } from "react";
+import type { FormEvent, ReactNode, TouchEvent } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 
 type Person = {
@@ -128,6 +130,9 @@ export function HomieApp() {
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [recentlyCompletedId, setRecentlyCompletedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const pullStartY = useRef<number | null>(null);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [pullRefreshing, setPullRefreshing] = useState(false);
 
   const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? null;
   const planningDays = useMemo(() => nextSevenDays(), []);
@@ -241,6 +246,40 @@ export function HomieApp() {
     }
   }
 
+  function beginPull(event: TouchEvent<HTMLElement>) {
+    if (view === "add" || selectedTask || pullRefreshing || window.scrollY > 0) return;
+    pullStartY.current = event.touches[0]?.clientY ?? null;
+  }
+
+  function movePull(event: TouchEvent<HTMLElement>) {
+    if (pullStartY.current === null || selectedTask || window.scrollY > 0) return;
+    const nextY = event.touches[0]?.clientY;
+    if (typeof nextY !== "number") return;
+    const delta = nextY - pullStartY.current;
+    setPullDistance(delta > 0 ? Math.min(78, Math.round(delta * 0.55)) : 0);
+  }
+
+  async function endPull() {
+    if (pullStartY.current === null) return;
+    pullStartY.current = null;
+    if (pullDistance < 54) {
+      setPullDistance(0);
+      return;
+    }
+    setPullRefreshing(true);
+    setPullDistance(62);
+    try {
+      await refresh();
+    } catch (nextError) {
+      setError((nextError as Error).message);
+    } finally {
+      window.setTimeout(() => {
+        setPullRefreshing(false);
+        setPullDistance(0);
+      }, 320);
+    }
+  }
+
   if (!bootstrap) {
     return (
       <main className="homie-shell loading-shell">
@@ -269,16 +308,30 @@ export function HomieApp() {
   };
 
   return (
-    <main className="homie-shell">
-      <section className={clsx("app-hero", view === "add" && "is-compact")}>
-        <header className="top-bar">
+    <main className="homie-shell" onTouchStart={beginPull} onTouchMove={movePull} onTouchEnd={endPull} onTouchCancel={endPull}>
+      {view !== "add" && !selectedTask ? (
+        <div
+          className={clsx("pull-refresh", (pullDistance > 0 || pullRefreshing) && "is-visible", pullRefreshing && "is-refreshing")}
+          style={{ transform: `translate(-50%, ${Math.min(pullDistance, 62)}px)` }}
+          aria-hidden="true"
+        >
+          <RefreshCw size={16} />
+        </div>
+      ) : null}
+      <section
+        className={clsx("app-hero", view === "add" && "is-compact")}
+        style={{
+          padding: "calc(36px + env(safe-area-inset-top)) 22px 8px",
+        }}
+      >
+        <header className="top-bar" style={{ minHeight: 42 }}>
           <div className="brand-lockup">
             <h1>Homie</h1>
           </div>
         </header>
 
         {view !== "add" ? (
-          <nav className="mode-tabs" aria-label="Main navigation">
+          <nav className="mode-tabs" aria-label="Main navigation" style={{ height: 54, margin: "16px auto 0" }}>
             <NavButton icon={<CalendarClock size={18} />} label="Today" active={view === "today"} onClick={() => setView("today")} />
             <NavButton icon={<CalendarDays size={18} />} label="Week" active={view === "week"} onClick={() => setView("week")} />
             <NavButton icon={<ListFilter size={18} />} label="All" active={view === "all"} onClick={() => setView("all")} />
@@ -401,6 +454,7 @@ export function HomieApp() {
 
       {selectedTask ? (
         <TaskDetailSheet
+          key={selectedTask.id}
           bootstrap={bootstrap}
           task={selectedTask}
           currentPersonId={currentPersonId}
@@ -923,10 +977,16 @@ function TaskCard({
           <span className="task-pill category-pill" style={{ borderColor: task.category.color, color: task.category.color }}>
             {task.category.name}
           </span>
-          <span className="task-pill owner-pill">{task.assignee?.name ?? "Unassigned"}</span>
-          {task.createdBy ? <span className="task-pill creator-pill">Added by {task.createdBy.name}</span> : null}
+          <span className={clsx("task-pill", "owner-pill", personPillClass(task.assignee))}>{task.assignee?.name ?? "Unassigned"}</span>
           <span className="task-pill timing-pill">{taskTimingLabel(task)}</span>
-          <span className={clsx("task-pill", "priority-pill", `task-priority-${task.priority}`)}>{priorityLabels[task.priority]}</span>
+          {task.priority !== "normal" ? (
+            <span className={clsx("task-pill", "priority-pill", `task-priority-${task.priority}`)}>{priorityLabels[task.priority]}</span>
+          ) : null}
+          {task.photos.length ? (
+            <span className="task-pill photo-indicator" aria-label={`${task.photos.length} photo${task.photos.length === 1 ? "" : "s"} attached`}>
+              <Camera size={12} />
+            </span>
+          ) : null}
           {task.recurringRule?.isActive ? (
             <span className="task-pill repeat-pill">
               <Repeat2 size={12} />
@@ -935,14 +995,6 @@ function TaskCard({
           ) : null}
         </span>
       </button>
-      {task.photos.length ? (
-        <div className="thumb-strip" aria-label="Task photos">
-          {task.photos.slice(0, 3).map((photo) => (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img key={photo.id} src={`/api/photos/${photo.id}`} alt="" />
-          ))}
-        </div>
-      ) : null}
     </article>
   );
 }
@@ -975,6 +1027,8 @@ function TaskDetailSheet({
   const [repeatFrequency, setRepeatFrequency] = useState<RecurrenceFrequency>(task.recurringRule?.frequency ?? "weekly");
   const [repeatEnds, setRepeatEnds] = useState(Boolean(task.recurringRule?.endDate));
   const [repeatEndDate, setRepeatEndDate] = useState(task.recurringRule?.endDate ?? "");
+  const [isEditing, setIsEditing] = useState(false);
+  const [expandedPhotoId, setExpandedPhotoId] = useState<string | null>(null);
 
   async function updateTask(
     patch: Partial<Pick<Task, "categoryId" | "assigneeId" | "priority" | "dueAt">> & {
@@ -1052,24 +1106,38 @@ function TaskDetailSheet({
   }
 
   return (
-    <section className="detail-backdrop" aria-label="Task detail">
-      <div className="detail-sheet">
+    <section
+      className="detail-backdrop"
+      style={{ alignItems: "flex-start", padding: "calc(58px + env(safe-area-inset-top)) var(--space-3) 24px" }}
+      aria-label="Task detail"
+    >
+      <div className="detail-sheet" style={{ maxHeight: "calc(100dvh - 82px - env(safe-area-inset-top))" }}>
         <header className="detail-header">
           <div>
             <p className="eyebrow">{task.category.name}</p>
             <h2>{task.title}</h2>
           </div>
-          <button className="icon-toggle" type="button" onClick={onClose} aria-label="Close task detail">
-            <X size={20} />
-          </button>
+          <div className="detail-actions">
+            <button
+              className={clsx("icon-toggle", isEditing && "is-on")}
+              type="button"
+              onClick={() => setIsEditing((value) => !value)}
+              aria-label={isEditing ? "Stop editing task" : "Edit task details"}
+            >
+              <Pencil size={18} />
+            </button>
+            <button className="icon-toggle" type="button" onClick={onClose} aria-label="Close task detail">
+              <X size={20} />
+            </button>
+          </div>
         </header>
 
         <div className="detail-chips">
-          <span className={clsx("priority-chip", `priority-${task.priority}`, "is-selected")}>{priorityLabels[task.priority]}</span>
-          <span>{task.assignee?.name ?? "Unassigned"}</span>
-          {task.createdBy ? <span>Added by {task.createdBy.name}</span> : null}
+          {task.priority !== "normal" ? (
+            <span className={clsx("priority-chip", `priority-${task.priority}`, "is-selected")}>{priorityLabels[task.priority]}</span>
+          ) : null}
+          <span className={clsx("detail-person-pill", personPillClass(task.assignee))}>{task.assignee?.name ?? "Unassigned"}</span>
           {task.plannedFor ? <span>{plannedLabel(task.plannedFor)}</span> : null}
-          <span>{urgencyLabels[task.urgency]}</span>
           {task.dueAt ? <span>Due {formatDueDate(task.dueAt)}</span> : null}
           {task.recurringRule?.isActive ? (
             <span className="repeat-chip">
@@ -1113,7 +1181,8 @@ function TaskDetailSheet({
           </div>
         </details>
 
-        <section className="edit-panel" aria-label="Edit task details">
+        {isEditing ? (
+          <section className="edit-panel" aria-label="Edit task details">
           <div className="field-grid">
             <label className="field-block">
               <span>Category</span>
@@ -1237,21 +1306,35 @@ function TaskDetailSheet({
               </div>
             ) : null}
           </section>
-        </section>
+          </section>
+        ) : null}
 
         {task.photos.length ? (
           <div className="photo-grid">
             {task.photos.map((photo) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={photo.id} src={`/api/photos/${photo.id}`} alt="" />
+              <button
+                key={photo.id}
+                className="photo-tile"
+                style={{ display: "block", overflow: "hidden", padding: 0, border: "1px solid var(--line)", borderRadius: 14, background: "var(--surface-soft)" }}
+                type="button"
+                onClick={() => setExpandedPhotoId(photo.id)}
+                aria-label={`Open ${photo.fileName}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={`/api/photos/${photo.id}`} alt={photo.caption || photo.fileName} />
+              </button>
             ))}
           </div>
         ) : null}
 
-        {task.description ? <p className="detail-description">{task.description}</p> : null}
-
         <section className="notes-list">
           <h3>Notes</h3>
+          {task.description ? (
+            <p>
+              <span>{task.createdBy?.name ?? "Original note"}</span>
+              {task.description}
+            </p>
+          ) : null}
           {task.notes.length ? (
             task.notes.map((item) => (
               <p key={item.id}>
@@ -1259,9 +1342,9 @@ function TaskDetailSheet({
                 {item.body}
               </p>
             ))
-          ) : (
+          ) : !task.description ? (
             <p className="muted">No notes yet.</p>
-          )}
+          ) : null}
         </section>
 
         <form className="note-form" onSubmit={submitNote}>
@@ -1276,6 +1359,27 @@ function TaskDetailSheet({
           <span>{parentBusy ? "Removing" : "Remove from board"}</span>
         </button>
       </div>
+
+      {expandedPhotoId ? (
+        <button
+          className="photo-lightbox"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 40,
+            display: "grid",
+            placeItems: "center",
+            padding: "calc(48px + env(safe-area-inset-top)) 18px calc(32px + env(safe-area-inset-bottom))",
+            background: "rgb(17 28 69 / 76%)",
+          }}
+          type="button"
+          onClick={() => setExpandedPhotoId(null)}
+          aria-label="Close enlarged photo"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img style={{ maxWidth: "min(100%, 720px)", maxHeight: "78dvh", objectFit: "contain", borderRadius: 18 }} src={`/api/photos/${expandedPhotoId}`} alt="" />
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -1343,6 +1447,12 @@ function isOpenTask(task: Task) {
 function filterByAssigneeScope(tasks: Task[], assigneeScopeId: string) {
   if (assigneeScopeId === "all") return tasks;
   return tasks.filter((task) => task.assigneeId === assigneeScopeId);
+}
+
+function personPillClass(person: Person | null) {
+  if (person?.slug === "caroline") return "person-caroline";
+  if (person?.slug === "ryan") return "person-ryan";
+  return "person-unassigned";
 }
 
 function noteAuthorLabel(note: TaskNote, people: Person[]) {
