@@ -4,6 +4,27 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Homie",
   description: "A mobile-first household task board for Ryan and Caroline.",
+  icons: {
+    icon: [
+      {
+        url: "/icons/homie-icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+      {
+        url: "/icons/homie-icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
+      },
+    ],
+    apple: [
+      {
+        url: "/icons/apple-touch-icon.png",
+        sizes: "180x180",
+        type: "image/png",
+      },
+    ],
+  },
   appleWebApp: {
     capable: true,
     title: "Homie",

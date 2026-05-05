@@ -111,6 +111,56 @@ test.describe("real-world mobile UX and database validation", () => {
     });
   });
 
+  test("moves overdue due dates and expired plans into Today due today", async ({ page }, testInfo) => {
+    const pastDueTitle = uniqueTitle("E2E overdue due", testInfo);
+    const pastPlannedTitle = uniqueTitle("E2E expired plan", testInfo);
+    const futureDueTitle = uniqueTitle("E2E future due", testInfo);
+    const futurePlannedTitle = uniqueTitle("E2E future plan", testInfo);
+
+    await createTaskViaApi(page, {
+      title: pastDueTitle,
+      dueAt: isoFromLocalInput(localDateTimeInput(-2, 9, 0)),
+      categoryId: "cat_house",
+      assigneeId: "person_ryan",
+    });
+    await createTaskViaApi(page, {
+      title: pastPlannedTitle,
+      plannedFor: localDateKey(-2),
+      categoryId: "cat_house",
+      assigneeId: "person_ryan",
+    });
+    await createTaskViaApi(page, {
+      title: futureDueTitle,
+      dueAt: isoFromLocalInput(localDateTimeInput(2, 9, 0)),
+      categoryId: "cat_house",
+      assigneeId: "person_ryan",
+    });
+    await createTaskViaApi(page, {
+      title: futurePlannedTitle,
+      plannedFor: localDateKey(2),
+      categoryId: "cat_house",
+      assigneeId: "person_ryan",
+    });
+
+    await gotoReady(page);
+    await page.getByRole("button", { name: "Today", exact: true }).click();
+    await setOwnerScope(page, "All");
+
+    const todayDue = page.getByLabel("Due today", { exact: true });
+    const pastDueCard = todayDue.getByTestId("task-card").filter({ hasText: pastDueTitle });
+    const pastPlannedCard = todayDue.getByTestId("task-card").filter({ hasText: pastPlannedTitle });
+    await expect(pastDueCard).toBeVisible();
+    await expect(pastDueCard.locator(".overdue-pill")).toBeVisible();
+    await expect(pastPlannedCard).toBeVisible();
+    await expect(pastPlannedCard.locator(".overdue-pill")).toBeVisible();
+    await expect(taskCard(page, futureDueTitle)).toHaveCount(0);
+    await expect(taskCard(page, futurePlannedTitle)).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Week", exact: true }).click();
+    await expect(plannedTaskCard(page, futurePlannedTitle)).toBeVisible();
+    await expect(plannedTaskCard(page, futureDueTitle)).toBeVisible();
+  });
+
   test("uploads multiple photos from the UI and serves them back through the photo API", async ({ page }, testInfo) => {
     const title = uniqueTitle("E2E photo pile", testInfo);
 

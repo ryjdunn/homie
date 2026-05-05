@@ -600,9 +600,18 @@ textarea:focus-visible {
 }
 
 .task-card.just-completed {
-  background: #f3fff3;
-  opacity: 0.58;
-  transform: scale(0.99);
+  background: #fbfffd;
+  animation: task-done-settle 440ms cubic-bezier(0.2, 0.85, 0.2, 1);
+}
+
+.task-card.just-completed::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent 0%, rgb(36 170 98 / 10%) 45%, rgb(36 170 98 / 16%) 55%, transparent 100%);
+  content: "";
+  transform: translateX(-110%);
+  animation: task-done-sheen 520ms ease-out forwards;
 }
 
 .complete-button {
@@ -640,10 +649,133 @@ textarea:focus-visible {
   content: "";
 }
 
+.complete-button.is-celebrating {
+  animation: complete-button-pop 440ms cubic-bezier(0.18, 0.9, 0.24, 1.2);
+}
+
+.complete-button.is-celebrating::before {
+  animation: complete-fill-pop 440ms cubic-bezier(0.18, 0.9, 0.24, 1.2);
+  box-shadow: 0 0 0 5px rgb(36 170 98 / 8%);
+}
+
+.complete-button.is-celebrating::after {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid rgb(36 170 98 / 42%);
+  border-radius: 999px;
+  content: "";
+  animation: complete-ring 520ms ease-out forwards;
+}
+
 .complete-button.is-done svg {
   width: 14px;
   height: 14px;
   stroke-width: 3;
+}
+
+.complete-button.is-celebrating svg {
+  animation: complete-check-pop 360ms cubic-bezier(0.2, 0.9, 0.24, 1.2);
+}
+
+@keyframes complete-button-pop {
+  0% {
+    transform: scale(0.86);
+  }
+
+  46% {
+    transform: scale(1.18);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes complete-fill-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.55);
+  }
+
+  48% {
+    opacity: 1;
+    transform: scale(1.16);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes complete-ring {
+  0% {
+    opacity: 0.8;
+    transform: scale(0.9);
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(2.15);
+  }
+}
+
+@keyframes complete-check-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+
+  58% {
+    opacity: 1;
+    transform: scale(1.18);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes task-done-settle {
+  0% {
+    transform: scale(1);
+  }
+
+  35% {
+    transform: translateY(1px) scale(0.996);
+  }
+
+  100% {
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes task-done-sheen {
+  0% {
+    transform: translateX(-110%);
+  }
+
+  100% {
+    transform: translateX(110%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-card.just-completed,
+  .task-card.just-completed::after,
+  .complete-button.is-celebrating,
+  .complete-button.is-celebrating::before,
+  .complete-button.is-celebrating::after,
+  .complete-button.is-celebrating svg {
+    animation: none;
+  }
+
+  .complete-button.is-celebrating::after,
+  .task-card.just-completed::after {
+    display: none;
+  }
 }
 
 .task-main {
@@ -747,6 +879,19 @@ textarea:focus-visible {
 .timing-pill {
   background: #f4f7fc;
   color: #6f7b96;
+}
+
+.overdue-pill {
+  gap: 4px;
+  border-color: rgb(226 51 44 / 18%);
+  background: #fff1f2;
+  color: var(--danger);
+}
+
+.overdue-pill svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.4;
 }
 
 .task-priority-low {
@@ -1194,30 +1339,86 @@ textarea:focus-visible {
   font-weight: var(--weight-label);
 }
 
-.notes-list p {
-  margin: 0;
+.note-item {
+  display: grid;
+  gap: 6px;
   padding: var(--space-2) var(--space-3);
-  border-radius: 13px;
-  background: var(--surface-soft);
+  border-radius: 14px;
+  background: #eaf4ff;
+}
+
+.note-item.original-note {
+  gap: 5px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.note-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  color: var(--ink-soft);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-label);
+  line-height: 1.15;
+}
+
+.note-meta time,
+.note-meta em {
+  color: #7f8aa3;
+  font-style: normal;
+}
+
+.note-meta span,
+.note-meta time,
+.note-meta em {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+.note-meta time::before,
+.note-meta em::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: #a4aec2;
+}
+
+.note-body,
+.notes-list p.muted {
+  margin: 0;
   color: var(--foreground);
   font-size: var(--text-md);
   line-height: 1.32;
   overflow-wrap: anywhere;
 }
 
+.original-note .note-body {
+  color: #2f3d66;
+  font-size: var(--text-sm);
+  line-height: 1.42;
+}
+
+.note-body a {
+  color: var(--hero);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
 .notes-list p.muted {
+  padding: var(--space-2) var(--space-3);
+  border-radius: 13px;
+  background: var(--surface-soft);
   color: var(--ink-soft);
   font-size: var(--text-sm);
   font-weight: var(--weight-label);
   text-transform: none;
-}
-
-.notes-list p span {
-  display: block;
-  margin-bottom: 3px;
-  color: var(--ink-soft);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-label);
 }
 
 .note-form {

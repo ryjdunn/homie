@@ -7,6 +7,7 @@ import {
   Check,
   Circle,
   ClipboardCheck,
+  Flag,
   ImagePlus,
   Inbox,
   ListFilter,
@@ -67,6 +68,7 @@ type Task = {
   dueAt: string | null;
   plannedFor: string | null;
   completedAt: string | null;
+  createdAt: string;
   assigneeId: string | null;
   createdById: string | null;
   categoryId: string;
@@ -179,10 +181,13 @@ export function HomieApp() {
     setBusyTaskId(task.id);
     setRecentlyCompletedId(task.id);
     try {
-      await api(`/api/tasks/${task.id}/complete`, {
-        method: "POST",
-        headers: personHeaders(currentPersonId),
-      });
+      await Promise.all([
+        api(`/api/tasks/${task.id}/complete`, {
+          method: "POST",
+          headers: personHeaders(currentPersonId),
+        }),
+        sleep(420),
+      ]);
       await refresh();
       window.setTimeout(() => setRecentlyCompletedId(null), 900);
     } catch (nextError) {
@@ -496,12 +501,20 @@ function WeekPlan({
   onReopen: (task: Task) => void;
 }) {
   const openTasks = filterByAssigneeScope(tasks.filter(isOpenTask), assigneeScopeId);
-  const plannedThisWeek = openTasks.filter((task) => task.plannedFor && days.some((day) => day.value === task.plannedFor));
   const weekStart = days[0]?.value;
   const weekEnd = days[days.length - 1]?.value;
+  const plannedThisWeek = openTasks.filter(
+    (task) => task.plannedFor && days.some((day) => day.value === task.plannedFor) && !isPastPlannedTask(task, weekStart ?? dateKey(new Date())),
+  );
   const dueThisWeek =
     weekStart && weekEnd
-      ? openTasks.filter((task) => !task.plannedFor && task.dueAt && isDateKeyInRange(dueDateKey(task.dueAt), weekStart, weekEnd))
+      ? openTasks
+          .filter(
+            (task) =>
+              isPastPlannedTask(task, weekStart) ||
+              (!task.plannedFor && task.dueAt && isDateKeyInRange(dueDateKey(task.dueAt), weekStart, weekEnd)),
+          )
+          .sort((first, second) => sortDueTasks(first, second, weekStart))
       : [];
   const weekCount = plannedThisWeek.length + dueThisWeek.length;
   const plannedDays = days
@@ -592,7 +605,9 @@ function TodayPlan({
 }) {
   const openTasks = filterByAssigneeScope(tasks.filter(isOpenTask), assigneeScopeId);
   const scheduledToday = openTasks.filter((task) => task.plannedFor === todayKey);
-  const dueToday = openTasks.filter((task) => !task.plannedFor && task.dueAt && dueDateKey(task.dueAt) <= todayKey);
+  const dueToday = openTasks
+    .filter((task) => isDueTodayTask(task, todayKey))
+    .sort((first, second) => sortDueTasks(first, second, todayKey));
   const todayCount = scheduledToday.length + dueToday.length;
 
   return (
@@ -617,7 +632,7 @@ function TodayPlan({
           onReopen={onReopen}
         />
         <TaskGroupSection
-          title="Due"
+          title="Due today"
           tasks={dueToday}
           emptyText="Nothing due today."
           emptyIcon={<Inbox size={26} />}
@@ -959,16 +974,18 @@ function TaskCard({
   onReopen: () => void;
 }) {
   const done = task.status === "done";
+  const showingDone = done || justCompleted;
+  const overdue = isTaskOverdue(task);
   return (
-    <article className={clsx("task-card", justCompleted && "just-completed")} data-testid="task-card">
+    <article className={clsx("task-card", overdue && "is-overdue", justCompleted && "just-completed")} data-testid="task-card">
       <button
-        className={clsx("complete-button", done && "is-done")}
+        className={clsx("complete-button", showingDone && "is-done", justCompleted && "is-celebrating")}
         type="button"
         disabled={busy}
         onClick={done ? onReopen : onComplete}
         aria-label={done ? `Reopen ${task.title}` : `Complete ${task.title}`}
       >
-        {done ? <Check size={22} /> : <Circle size={22} />}
+        {showingDone ? <Check size={22} /> : <Circle size={22} />}
       </button>
       <button className="task-main" type="button" onClick={onOpen}>
         <span className="task-title">{task.title}</span>
@@ -978,6 +995,12 @@ function TaskCard({
             {task.category.name}
           </span>
           <span className={clsx("task-pill", "owner-pill", personPillClass(task.assignee))}>{task.assignee?.name ?? "Unassigned"}</span>
+          {overdue ? (
+            <span className="task-pill overdue-pill" aria-label={`${task.title} is overdue`}>
+              <Flag size={11} />
+              Overdue
+            </span>
+          ) : null}
           <span className="task-pill timing-pill">{taskTimingLabel(task)}</span>
           {task.priority !== "normal" ? (
             <span className={clsx("task-pill", "priority-pill", `task-priority-${task.priority}`)}>{priorityLabels[task.priority]}</span>
@@ -1330,17 +1353,24 @@ function TaskDetailSheet({
         <section className="notes-list">
           <h3>Notes</h3>
           {task.description ? (
-            <p>
-              <span>{task.createdBy?.name ?? "Original note"}</span>
-              {task.description}
-            </p>
+            <article className="note-item original-note">
+              <div className="note-meta">
+                <span>{task.createdBy?.name ?? "Original note"}</span>
+                <time dateTime={task.createdAt}>{formatNoteTime(task.createdAt)}</time>
+                <em>Initial note</em>
+              </div>
+              <p className="note-body">{linkifyText(task.description)}</p>
+            </article>
           ) : null}
           {task.notes.length ? (
             task.notes.map((item) => (
-              <p key={item.id}>
-                <span>{noteAuthorLabel(item, bootstrap.people)}</span>
-                {item.body}
-              </p>
+              <article className="note-item" key={item.id}>
+                <div className="note-meta">
+                  <span>{noteAuthorLabel(item, bootstrap.people)}</span>
+                  <time dateTime={item.createdAt}>{formatNoteTime(item.createdAt)}</time>
+                </div>
+                <p className="note-body">{linkifyText(item.body)}</p>
+              </article>
             ))
           ) : !task.description ? (
             <p className="muted">No notes yet.</p>
@@ -1432,6 +1462,10 @@ function addFiles(existing: File[], next: FileList | null) {
   return [...existing, ...Array.from(next)];
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 type PlanningDay = {
   value: string;
   label: string;
@@ -1463,6 +1497,27 @@ function noteAuthorLabel(note: TaskNote, people: Person[]) {
   return "System";
 }
 
+function formatNoteTime(value: string) {
+  const date = new Date(value);
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date);
+}
+
+function linkifyText(text: string) {
+  const parts = text.split(/(https?:\/\/[^\s]+)/g);
+  return parts.map((part, index) => {
+    if (!/^https?:\/\//.test(part)) return part;
+    const [, url = part, trailing = ""] = part.match(/^(.*?)([),.;:!?]+)?$/) ?? [];
+    return (
+      <span key={`${url}-${index}`}>
+        <a href={url} target="_blank" rel="noreferrer">
+          {url}
+        </a>
+        {trailing}
+      </span>
+    );
+  });
+}
+
 function nextSevenDays(now = new Date()): PlanningDay[] {
   return Array.from({ length: 7 }, (_, index) => {
     const date = new Date(now);
@@ -1488,6 +1543,36 @@ function dueDateKey(value: string) {
   return dateKey(new Date(value));
 }
 
+function isPastPlannedTask(task: Task, todayKey = dateKey(new Date())) {
+  return Boolean(task.plannedFor) && (task.plannedFor as string) < todayKey;
+}
+
+function isDueTodayTask(task: Task, todayKey = dateKey(new Date())) {
+  if (isPastPlannedTask(task, todayKey)) return true;
+  if (task.plannedFor) return false;
+  return Boolean(task.dueAt) && dueDateKey(task.dueAt as string) <= todayKey;
+}
+
+function isTaskOverdue(task: Task, todayKey = dateKey(new Date())) {
+  if (task.status === "done" || task.status === "archived") return false;
+  if (isPastPlannedTask(task, todayKey)) return true;
+  if (task.plannedFor) return false;
+  return Boolean(task.dueAt) && dueDateKey(task.dueAt as string) < todayKey;
+}
+
+function sortDueTasks(first: Task, second: Task, todayKey = dateKey(new Date())) {
+  const firstDue = taskDueBucketKey(first, todayKey);
+  const secondDue = taskDueBucketKey(second, todayKey);
+  if (firstDue !== secondDue) return firstDue.localeCompare(secondDue);
+  return first.createdAt.localeCompare(second.createdAt);
+}
+
+function taskDueBucketKey(task: Task, todayKey: string) {
+  if (isPastPlannedTask(task, todayKey)) return task.plannedFor as string;
+  if (task.dueAt) return dueDateKey(task.dueAt);
+  return todayKey;
+}
+
 function localDateToIso(value: string) {
   return new Date(`${value}T12:00:00`).toISOString();
 }
@@ -1511,6 +1596,7 @@ function plannedLabel(value: string) {
   const tomorrow = dateKey(addLocalDays(new Date(), 1));
   if (value === today) return "Planned today";
   if (value === tomorrow) return "Planned tomorrow";
+  if (value < today) return `Planned ${formatDueDate(`${value}T12:00:00`)}`;
   return `Planned ${weekdayName(new Date(`${value}T12:00:00`), "short")}`;
 }
 

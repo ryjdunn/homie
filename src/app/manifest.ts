@@ -11,9 +11,16 @@ export default function manifest(): MetadataRoute.Manifest {
     theme_color: "#0875d8",
     icons: [
       {
-        src: "/icons/homie.svg",
-        sizes: "any",
-        type: "image/svg+xml",
+        src: "/icons/homie-icon-192.png",
+        sizes: "192x192",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "/icons/homie-icon-512.png",
+        sizes: "512x512",
+        type: "image/png",
+        purpose: "any",
       },
     ],
   };
