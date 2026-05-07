@@ -10,12 +10,14 @@ import {
   Flag,
   ImagePlus,
   Inbox,
+  Link2,
   ListFilter,
   Pencil,
   Plus,
   RefreshCw,
   Repeat2,
   Send,
+  Settings,
   Trash2,
   Undo2,
   X,
@@ -23,6 +25,7 @@ import {
 import type { FormEvent, ReactNode, TouchEvent } from "react";
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
+import { defaultThemeId, isHomieThemeId, themeOptions, type HomieThemeId } from "@/app/theme";
 
 type Person = {
   id: string;
@@ -132,6 +135,12 @@ export function HomieApp() {
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
   const [recentlyCompletedId, setRecentlyCompletedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [themeId, setThemeId] = useState<HomieThemeId>(() => {
+    if (typeof window === "undefined") return defaultThemeId;
+    const remembered = window.localStorage.getItem("homie.themeId");
+    return isHomieThemeId(remembered) ? remembered : defaultThemeId;
+  });
   const pullStartY = useRef<number | null>(null);
   const [pullDistance, setPullDistance] = useState(0);
   const [pullRefreshing, setPullRefreshing] = useState(false);
@@ -158,12 +167,27 @@ export function HomieApp() {
   }, []);
 
   useEffect(() => {
+    const syncSelectedTaskFromUrl = () => {
+      const taskId = new URL(window.location.href).searchParams.get("task");
+      setSelectedTaskId(taskId);
+    };
+    syncSelectedTaskFromUrl();
+    window.addEventListener("popstate", syncSelectedTaskFromUrl);
+    return () => window.removeEventListener("popstate", syncSelectedTaskFromUrl);
+  }, []);
+
+  useEffect(() => {
     window.localStorage.setItem("homie.personId", currentPersonId);
   }, [currentPersonId]);
 
   useEffect(() => {
     window.localStorage.setItem("homie.personScopeId", personScopeId);
   }, [personScopeId]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeId;
+    window.localStorage.setItem("homie.themeId", themeId);
+  }, [themeId]);
 
   const visibleTasks = useMemo(() => {
     return tasks.filter((task) => {
@@ -221,15 +245,29 @@ export function HomieApp() {
           "content-type": "application/json",
           ...personHeaders(currentPersonId),
         },
-        body: JSON.stringify({ status: "archived" }),
+        body: JSON.stringify({
+          status: "archived",
+          ...(task.recurringRule?.isActive ? { recurrence: null } : {}),
+        }),
       });
       setSelectedTaskId(null);
+      syncTaskUrl(null, "replace");
       await refresh();
     } catch (nextError) {
       setError((nextError as Error).message);
     } finally {
       setBusyTaskId(null);
     }
+  }
+
+  function openTaskDetail(taskId: string) {
+    setSelectedTaskId(taskId);
+    syncTaskUrl(taskId);
+  }
+
+  function closeTaskDetail() {
+    setSelectedTaskId(null);
+    syncTaskUrl(null);
   }
 
   async function planTask(task: Task, plannedFor: string | null) {
@@ -382,7 +420,7 @@ export function HomieApp() {
           assigneeScopeId={personScopeId}
           busyTaskId={busyTaskId}
           recentlyCompletedId={recentlyCompletedId}
-          onOpen={(task) => setSelectedTaskId(task.id)}
+          onOpen={(task) => openTaskDetail(task.id)}
           onComplete={completeTask}
           onReopen={reopenTask}
         />
@@ -393,7 +431,7 @@ export function HomieApp() {
           assigneeScopeId={personScopeId}
           busyTaskId={busyTaskId}
           recentlyCompletedId={recentlyCompletedId}
-          onOpen={(task) => setSelectedTaskId(task.id)}
+          onOpen={(task) => openTaskDetail(task.id)}
           onComplete={completeTask}
           onReopen={reopenTask}
         />
@@ -445,7 +483,7 @@ export function HomieApp() {
                   task={task}
                   busy={busyTaskId === task.id}
                   justCompleted={recentlyCompletedId === task.id}
-                  onOpen={() => setSelectedTaskId(task.id)}
+                  onOpen={() => openTaskDetail(task.id)}
                   onComplete={() => completeTask(task)}
                   onReopen={() => reopenTask(task)}
                 />
@@ -464,7 +502,7 @@ export function HomieApp() {
           task={selectedTask}
           currentPersonId={currentPersonId}
           busy={busyTaskId === selectedTask.id}
-          onClose={() => setSelectedTaskId(null)}
+          onClose={closeTaskDetail}
           onArchive={() => archiveTask(selectedTask)}
           onPlan={(plannedFor) => planTask(selectedTask, plannedFor)}
           onRefresh={refresh}
@@ -472,12 +510,69 @@ export function HomieApp() {
         />
       ) : null}
 
+      {settingsOpen ? <SettingsSheet themeId={themeId} onThemeChange={setThemeId} onClose={() => setSettingsOpen(false)} /> : null}
+
       {view !== "add" ? (
-        <button className="floating-add" type="button" onClick={() => setView("add")} aria-label="Add task">
-          <Plus size={28} />
-        </button>
+        <>
+          <button className="floating-settings" type="button" onClick={() => setSettingsOpen(true)} aria-label="Open settings">
+            <Settings size={20} />
+          </button>
+          <button className="floating-add" type="button" onClick={() => setView("add")} aria-label="Add task">
+            <Plus size={28} />
+          </button>
+        </>
       ) : null}
     </main>
+  );
+}
+
+function SettingsSheet({
+  themeId,
+  onThemeChange,
+  onClose,
+}: {
+  themeId: HomieThemeId;
+  onThemeChange: (themeId: HomieThemeId) => void;
+  onClose: () => void;
+}) {
+  return (
+    <section className="settings-backdrop" role="dialog" aria-modal="true" aria-label="Settings">
+      <div className="settings-sheet">
+        <header className="settings-header">
+          <div>
+            <p className="eyebrow">Settings</p>
+            <h2>Make Homie yours</h2>
+          </div>
+          <button className="icon-toggle" type="button" onClick={onClose} aria-label="Close settings">
+            <X size={20} />
+          </button>
+        </header>
+
+        <section className="settings-section" aria-label="Theme settings">
+          <div>
+            <h3>Theme</h3>
+            <p>Pick the mood that fits the room: crisp daylight, cozy warm, or deep purple night mode.</p>
+          </div>
+          <div className="theme-option-list">
+            {themeOptions.map((option) => (
+              <button
+                key={option.id}
+                className={clsx("theme-option", themeId === option.id && "is-active")}
+                type="button"
+                onClick={() => onThemeChange(option.id)}
+                aria-pressed={themeId === option.id}
+              >
+                <span className={clsx("theme-swatch", `theme-swatch-${option.id}`)} aria-hidden="true" />
+                <span>
+                  <strong>{option.name}</strong>
+                  <small>{option.description}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+    </section>
   );
 }
 
@@ -915,7 +1010,7 @@ function AddTaskPanel({
             <input type="date" value={dueAt} onChange={(event) => setDueAt(event.target.value)} />
           </label>
 
-          <section className="repeat-editor" aria-label="Repeat">
+          <section className="repeat-editor" aria-label="Repeat settings">
             <label className="repeat-toggle">
               <input type="checkbox" checked={repeats} onChange={(event) => setRepeats(event.target.checked)} />
               <span>Repeat</span>
@@ -1052,6 +1147,7 @@ function TaskDetailSheet({
   const [repeatEndDate, setRepeatEndDate] = useState(task.recurringRule?.endDate ?? "");
   const [isEditing, setIsEditing] = useState(false);
   const [expandedPhotoId, setExpandedPhotoId] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   async function updateTask(
     patch: Partial<Pick<Task, "categoryId" | "assigneeId" | "priority" | "dueAt">> & {
@@ -1128,6 +1224,16 @@ function TaskDetailSheet({
     }
   }
 
+  async function copyTaskLink() {
+    try {
+      await copyTextToClipboard(taskShareUrl(task.id));
+      setLinkCopied(true);
+      window.setTimeout(() => setLinkCopied(false), 1500);
+    } catch (nextError) {
+      onError((nextError as Error).message);
+    }
+  }
+
   return (
     <section
       className="detail-backdrop"
@@ -1141,6 +1247,14 @@ function TaskDetailSheet({
             <h2>{task.title}</h2>
           </div>
           <div className="detail-actions">
+            <button
+              className={clsx("icon-toggle share-toggle", linkCopied && "is-copied")}
+              type="button"
+              onClick={copyTaskLink}
+              aria-label={linkCopied ? "Task link copied" : "Copy task link"}
+            >
+              {linkCopied ? <Check size={18} /> : <Link2 size={18} />}
+            </button>
             <button
               className={clsx("icon-toggle", isEditing && "is-on")}
               type="button"
@@ -1165,7 +1279,7 @@ function TaskDetailSheet({
           {task.recurringRule?.isActive ? (
             <span className="repeat-chip">
               <Repeat2 size={13} />
-              {recurrenceLabel(task.recurringRule)}
+              {recurrenceSummary(task.recurringRule)}
             </span>
           ) : null}
         </div>
@@ -1256,7 +1370,7 @@ function TaskDetailSheet({
             />
           </label>
 
-          <section className="repeat-editor" aria-label="Repeat">
+          <section className="repeat-editor" aria-label="Repeat settings">
             <label className="repeat-toggle">
               <input
                 type="checkbox"
@@ -1269,6 +1383,7 @@ function TaskDetailSheet({
               />
               <span>Repeat</span>
             </label>
+            {task.recurringRule?.isActive ? <p className="repeat-editor-copy">{recurrenceSummary(task.recurringRule)}</p> : null}
             {repeats ? (
               <div className="repeat-controls">
                 <label className="field-block">
@@ -1384,9 +1499,15 @@ function TaskDetailSheet({
           </button>
         </form>
 
-        <button className="danger-action" type="button" onClick={onArchive} disabled={busy || parentBusy} aria-label="Remove task">
+        <button
+          className="danger-action"
+          type="button"
+          onClick={onArchive}
+          disabled={busy || parentBusy}
+          aria-label={task.recurringRule?.isActive ? "Remove series" : "Remove task"}
+        >
           <Trash2 size={18} />
-          <span>{parentBusy ? "Removing" : "Remove from board"}</span>
+          <span>{parentBusy ? "Removing" : task.recurringRule?.isActive ? "Remove series" : "Remove from board"}</span>
         </button>
       </div>
 
@@ -1400,7 +1521,7 @@ function TaskDetailSheet({
             display: "grid",
             placeItems: "center",
             padding: "calc(48px + env(safe-area-inset-top)) 18px calc(32px + env(safe-area-inset-bottom))",
-            background: "rgb(17 28 69 / 76%)",
+            background: "var(--photo-lightbox-bg)",
           }}
           type="button"
           onClick={() => setExpandedPhotoId(null)}
@@ -1464,6 +1585,42 @@ function addFiles(existing: File[], next: FileList | null) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function syncTaskUrl(taskId: string | null, mode: "push" | "replace" = "push") {
+  const url = new URL(window.location.href);
+  if (taskId) {
+    url.searchParams.set("task", taskId);
+  } else {
+    url.searchParams.delete("task");
+  }
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  if (nextUrl === `${window.location.pathname}${window.location.search}${window.location.hash}`) return;
+  window.history[mode === "replace" ? "replaceState" : "pushState"](null, "", nextUrl);
+}
+
+function taskShareUrl(taskId: string) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("task", taskId);
+  return url.toString();
+}
+
+async function copyTextToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("Could not copy the task link.");
 }
 
 type PlanningDay = {
@@ -1611,6 +1768,12 @@ function recurrenceLabel(rule: NonNullable<Task["recurringRule"]>) {
   if (rule.frequency === "weekly") return rule.interval === 1 ? "Weekly" : `Every ${rule.interval} weeks`;
   if (rule.frequency === "monthly") return rule.interval === 1 ? "Monthly" : `Every ${rule.interval} months`;
   return `Every ${rule.interval} days`;
+}
+
+function recurrenceSummary(rule: NonNullable<Task["recurringRule"]>) {
+  const cadence = recurrenceLabel(rule).toLowerCase();
+  const end = rule.endDate ? `until ${formatDueDate(`${rule.endDate}T12:00:00`)}` : "indefinitely";
+  return `Repeats ${cadence} ${end}`;
 }
 
 function viewTitle(view: ViewMode, count: number) {

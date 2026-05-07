@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { homieThemeCss, webAppThemeColors } from "./theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -36,7 +37,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: "#0875d8",
+  themeColor: webAppThemeColors.theme,
 };
 
 export default function RootLayout({
@@ -46,6 +47,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="h-full antialiased">
+      <head>
+        <style id="homie-theme" dangerouslySetInnerHTML={{ __html: homieThemeCss }} />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

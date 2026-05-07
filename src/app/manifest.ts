@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { webAppThemeColors } from "./theme";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
@@ -7,8 +8,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Household tasks for Ryan and Caroline.",
     start_url: "/",
     display: "standalone",
-    background_color: "#f6faff",
-    theme_color: "#0875d8",
+    background_color: webAppThemeColors.background,
+    theme_color: webAppThemeColors.theme,
     icons: [
       {
         src: "/icons/homie-icon-192.png",

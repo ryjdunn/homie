@@ -1,6 +1,7 @@
 import { getServices } from "@/server/api/context";
 import { jsonError } from "@/server/api/http";
 import { readPhoto } from "@/server/storage/photo-storage";
+import { missingPhotoTheme } from "@/app/theme";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -34,11 +35,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 function missingPhotoSvg(fileName: string) {
   const safeName = escapeXml(fileName);
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" role="img" aria-label="Photo unavailable">
-  <rect width="320" height="320" rx="28" fill="#edf4ff"/>
-  <path d="M82 218h156l-42-54-34 42-24-30-56 42Z" fill="#9fc7f6"/>
-  <circle cx="108" cy="112" r="24" fill="#0875d8" opacity=".35"/>
-  <text x="160" y="252" text-anchor="middle" font-family="Avenir Next, Arial, sans-serif" font-size="20" font-weight="700" fill="#8b96ad">Photo unavailable</text>
-  <text x="160" y="278" text-anchor="middle" font-family="Avenir Next, Arial, sans-serif" font-size="14" fill="#8b96ad">${safeName}</text>
+  <rect width="320" height="320" rx="28" fill="${missingPhotoTheme.background}"/>
+  <path d="M82 218h156l-42-54-34 42-24-30-56 42Z" fill="${missingPhotoTheme.illustration}"/>
+  <circle cx="108" cy="112" r="24" fill="${missingPhotoTheme.accent}" opacity=".35"/>
+  <text x="160" y="252" text-anchor="middle" font-family="Avenir Next, Arial, sans-serif" font-size="20" font-weight="700" fill="${missingPhotoTheme.text}">Photo unavailable</text>
+  <text x="160" y="278" text-anchor="middle" font-family="Avenir Next, Arial, sans-serif" font-size="14" fill="${missingPhotoTheme.text}">${safeName}</text>
 </svg>`;
 }
 

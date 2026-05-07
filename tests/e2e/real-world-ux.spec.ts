@@ -32,6 +32,7 @@ type TaskInput = {
     frequency: "daily" | "weekly" | "every_n_days" | "monthly";
     interval: number;
     anchorDate: string;
+    endDate?: string | null;
   };
 };
 
@@ -539,6 +540,37 @@ test.describe("real-world mobile UX and database validation", () => {
     await expect(sendButton).toBeEnabled();
   });
 
+  test("copies and opens task share links from the detail sheet", async ({ page }, testInfo) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            (window as unknown as { __homieCopiedText?: string }).__homieCopiedText = value;
+          },
+        },
+      });
+    });
+
+    const title = uniqueTitle("E2E share link", testInfo);
+    const task = await createTaskViaApi(page, { title, categoryId: "cat_house", assigneeId: "person_caroline" });
+
+    await gotoAll(page);
+    await openTask(page, title);
+    await expect(page).toHaveURL(new RegExp(`\\?task=${task.id}`));
+
+    await page.getByRole("button", { name: "Copy task link" }).click();
+    await expect(page.getByRole("button", { name: "Task link copied" })).toBeVisible();
+    const copiedText = await page.evaluate(() => (window as unknown as { __homieCopiedText?: string }).__homieCopiedText);
+    expect(copiedText).toContain(`task=${task.id}`);
+
+    await page.getByRole("button", { name: "Close task detail" }).click();
+    await expect(page).not.toHaveURL(/task=/);
+
+    await page.goto(`/?task=${task.id}`);
+    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+  });
+
   test("recurring tasks complete into the next open occurrence", async ({ page }, testInfo) => {
     const title = uniqueTitle("E2E recurring sheets", testInfo);
     const dueAt = isoFromLocalInput(localDateTimeInput(0, 16, 0));
@@ -590,6 +622,86 @@ test.describe("real-world mobile UX and database validation", () => {
     });
   });
 
+  test("recurring series are summarized on details and changed from the edit menu", async ({ page }, testInfo) => {
+    const editTitle = uniqueTitle("E2E edit recurring", testInfo);
+    const removeTitle = uniqueTitle("E2E remove recurring", testInfo);
+    const dueAt = isoFromLocalInput(localDateTimeInput(0, 9, 0));
+
+    await createTaskViaApi(page, {
+      title: editTitle,
+      priority: "normal",
+      dueAt,
+      categoryId: "cat_house",
+      assigneeId: "person_caroline",
+      recurrence: {
+        frequency: "weekly",
+        interval: 1,
+        anchorDate: dueAt,
+      },
+    });
+    await createTaskViaApi(page, {
+      title: removeTitle,
+      priority: "normal",
+      dueAt,
+      categoryId: "cat_house",
+      assigneeId: "person_ryan",
+      recurrence: {
+        frequency: "weekly",
+        interval: 1,
+        anchorDate: dueAt,
+      },
+    });
+
+    await gotoAll(page);
+    await openTask(page, editTitle);
+
+    await expect(page.getByText("Repeats weekly indefinitely")).toBeVisible();
+    await expect(page.getByLabel("Repeat settings")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Edit task details" }).click();
+    const repeatEditor = page.getByLabel("Repeat settings");
+    await expect(repeatEditor).toBeVisible();
+    await expect(repeatEditor.getByText("Repeats weekly indefinitely")).toBeVisible();
+    await repeatEditor.getByLabel("Every").fill("2");
+    await repeatEditor.getByLabel("Every").blur();
+    await expect
+      .poll(() => getRecurringRule(editTitle), { timeout: 10_000 })
+      .toMatchObject({ frequency: "weekly", interval: 2, is_active: true });
+
+    await repeatEditor.getByLabel("Unit").selectOption("monthly");
+    await expect
+      .poll(() => getRecurringRule(editTitle), { timeout: 10_000 })
+      .toMatchObject({ frequency: "monthly", interval: 2, is_active: true });
+
+    await repeatEditor.getByLabel("Repeat").uncheck();
+    await expect(page.getByText("Repeats monthly indefinitely")).toHaveCount(0);
+    await expect.poll(() => getRecurringRule(editTitle), { timeout: 10_000 }).toMatchObject({ is_active: false });
+
+    await page.getByRole("button", { name: "Close task detail" }).click();
+    await openTask(page, removeTitle);
+    await page.getByRole("button", { name: "Remove series" }).click();
+
+    await expect(page.getByRole("heading", { name: removeTitle })).toHaveCount(0);
+    await expect(taskCard(page, removeTitle)).toHaveCount(0);
+    await expect
+      .poll(
+        () =>
+          withDb(async (sql) => {
+            const rows = await sql`
+              select tasks.status, recurring_rules.is_active
+              from tasks
+              left join recurring_rules on recurring_rules.task_id = tasks.id
+              where tasks.title = ${removeTitle}
+              order by recurring_rules.updated_at desc nulls last
+              limit 1
+            `;
+            return rows[0];
+          }),
+        { timeout: 10_000 },
+      )
+      .toMatchObject({ status: "archived", is_active: false });
+  });
+
   test("agent APIs can see UI-created work and write annotations for future agents", async ({ page }, testInfo) => {
     const title = uniqueTitle("E2E agent visible", testInfo);
     await addTaskViaUi(page, {
@@ -624,6 +736,7 @@ test.describe("real-world mobile UX and database validation", () => {
 
     const controls = [
       page.getByRole("button", { name: "Add task" }),
+      page.getByRole("button", { name: "Open settings" }),
       page.getByRole("button", { name: "Today", exact: true }),
       page.getByRole("button", { name: "Week", exact: true }),
       page.getByRole("button", { name: "All", exact: true }),
@@ -635,6 +748,28 @@ test.describe("real-world mobile UX and database validation", () => {
       expect(box?.width).toBeGreaterThanOrEqual(38);
       expect(box?.height).toBeGreaterThanOrEqual(38);
     }
+  });
+
+  test("settings gear switches theme profiles", async ({ page }) => {
+    await gotoReady(page);
+
+    await page.getByRole("button", { name: "Open settings" }).click();
+    const settings = page.getByRole("dialog", { name: "Settings" });
+    await expect(settings.getByRole("heading", { name: "Make Homie yours" })).toBeVisible();
+    await expect(settings.getByRole("button", { name: /Homie light/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(settings.getByRole("button", { name: "Homie warm Soft cream with cozy icon-inspired accents" })).toBeVisible();
+    await expect(settings.getByRole("button", { name: "Homie dark Deep purple for low-light task wrangling" })).toBeVisible();
+
+    await settings.getByRole("button", { name: "Homie warm Soft cream with cozy icon-inspired accents" }).click();
+    await expect(settings.getByRole("button", { name: /Homie warm/ })).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("homie-warm");
+
+    await settings.getByRole("button", { name: "Homie dark Deep purple for low-light task wrangling" }).click();
+    await expect(settings.getByRole("button", { name: /Homie dark/ })).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => page.evaluate(() => document.documentElement.dataset.theme)).toBe("homie-dark");
+
+    await settings.getByRole("button", { name: "Close settings" }).click();
+    await expect(settings).toHaveCount(0);
   });
 });
 
@@ -749,6 +884,21 @@ async function getTaskByTitle(title: string) {
     `;
     expect(rows).toHaveLength(1);
     return rows[0] as { id: string; title: string; status: string };
+  });
+}
+
+async function getRecurringRule(title: string) {
+  return withDb(async (sql) => {
+    const rows = await sql`
+      select recurring_rules.frequency, recurring_rules.interval, recurring_rules.is_active
+      from recurring_rules
+      join tasks on tasks.id = recurring_rules.task_id
+      where tasks.title = ${title}
+      order by recurring_rules.updated_at desc
+      limit 1
+    `;
+    expect(rows).toHaveLength(1);
+    return rows[0] as { frequency: string; interval: number; is_active: boolean };
   });
 }
 

@@ -1,4 +1,5 @@
 import { asc, eq } from "drizzle-orm";
+import { catalogTheme } from "@/app/theme";
 import type { DbConnection } from "@/server/db/client";
 import { categories, people, type Category, type NewCategory, type NewPerson, type Person } from "@/server/db/schema";
 
@@ -9,7 +10,7 @@ export const starterPeople: NewPerson[] = [
     name: "Unassigned",
     kind: "system",
     initials: "-",
-    color: "#7b8794",
+    color: catalogTheme.people.unassigned,
     sortOrder: 0,
   },
   {
@@ -18,7 +19,7 @@ export const starterPeople: NewPerson[] = [
     name: "Ryan",
     kind: "human",
     initials: "R",
-    color: "#167c80",
+    color: catalogTheme.people.ryan,
     sortOrder: 1,
   },
   {
@@ -27,7 +28,7 @@ export const starterPeople: NewPerson[] = [
     name: "Caroline",
     kind: "human",
     initials: "C",
-    color: "#d65a31",
+    color: catalogTheme.people.caroline,
     sortOrder: 2,
   },
 ];
@@ -37,7 +38,7 @@ export const starterCategories: NewCategory[] = [
     id: "cat_house",
     slug: "house",
     name: "House",
-    color: "#2f6f4e",
+    color: catalogTheme.categories.house,
     icon: "home",
     sortOrder: 1,
   },
@@ -45,7 +46,7 @@ export const starterCategories: NewCategory[] = [
     id: "cat_sell_donate",
     slug: "sell-donate",
     name: "Sell/Donate",
-    color: "#7c32ff",
+    color: catalogTheme.categories.sellDonate,
     icon: "tag",
     sortOrder: 2,
   },
@@ -53,7 +54,7 @@ export const starterCategories: NewCategory[] = [
     id: "cat_errands",
     slug: "errands",
     name: "Errands",
-    color: "#b5651d",
+    color: catalogTheme.categories.errands,
     icon: "route",
     sortOrder: 3,
   },
@@ -61,7 +62,7 @@ export const starterCategories: NewCategory[] = [
     id: "cat_kai",
     slug: "kai",
     name: "Kai",
-    color: "#17b5ad",
+    color: catalogTheme.categories.kai,
     icon: "user",
     sortOrder: 4,
   },
