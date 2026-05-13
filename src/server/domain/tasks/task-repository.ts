@@ -64,7 +64,7 @@ export class TaskRepository {
       .select()
       .from(tasks)
       .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(asc(tasks.status), asc(tasks.plannedFor), asc(tasks.dueAt), desc(tasks.createdAt));
+      .orderBy(asc(tasks.status), asc(tasks.sortGroupId), asc(tasks.sortOrder), asc(tasks.plannedFor), asc(tasks.dueAt), desc(tasks.createdAt));
   }
 
   async getTask(id: string): Promise<Task | undefined> {
@@ -91,6 +91,15 @@ export class TaskRepository {
         ...input,
         updatedAt: new Date(),
       })
+      .where(eq(tasks.id, id))
+      .returning();
+    return task;
+  }
+
+  async touchTask(id: string): Promise<Task | undefined> {
+    const [task] = await this.conn.db
+      .update(tasks)
+      .set({ updatedAt: new Date() })
       .where(eq(tasks.id, id))
       .returning();
     return task;

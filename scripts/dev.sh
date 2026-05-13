@@ -9,4 +9,4 @@ export HOMIE_UPLOAD_DIR="${HOMIE_UPLOAD_DIR:-${ROOT}/.homie/uploads}"
 cd "${ROOT}"
 brew services start postgresql@17 >/dev/null 2>&1 || true
 npm run db:prepare
-npm run dev -- --hostname 0.0.0.0
+npm run dev -- --hostname 127.0.0.1

@@ -36,7 +36,7 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "DATABASE_URL=postgres://localhost:5432/homie_e2e HOMIE_UPLOAD_DIR=.homie/e2e-uploads npm run dev:test",
+      "DATABASE_URL=postgres://localhost:5432/homie_e2e HOMIE_UPLOAD_DIR=.homie/e2e-uploads HOMIE_AGENT_TOKEN=e2e-agent-token npm run dev:test",
     url: "http://127.0.0.1:3100",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

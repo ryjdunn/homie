@@ -24,6 +24,7 @@ export type TaskFilters = {
   priority?: TaskPriority;
   plannedFor?: string;
   timeSensitive?: boolean;
+  needsReview?: boolean;
   includeArchived?: boolean;
 };
 
@@ -34,7 +35,17 @@ export type TaskActor =
 
 export type CreateTaskInput = Pick<
   NewTask,
-  "title" | "description" | "priority" | "dueAt" | "plannedFor" | "categoryId" | "assigneeId" | "createdById"
+  | "title"
+  | "description"
+  | "priority"
+  | "dueAt"
+  | "plannedFor"
+  | "categoryId"
+  | "assigneeId"
+  | "createdById"
+  | "sortGroupId"
+  | "sortGroupName"
+  | "sortOrder"
 > & {
   recurrence?: {
     frequency: NewRecurringRule["frequency"];
@@ -45,7 +56,10 @@ export type CreateTaskInput = Pick<
 };
 
 export type UpdateTaskInput = Partial<
-  Pick<NewTask, "title" | "description" | "status" | "priority" | "dueAt" | "plannedFor" | "categoryId" | "assigneeId">
+  Pick<
+    NewTask,
+    "title" | "description" | "status" | "priority" | "dueAt" | "plannedFor" | "categoryId" | "assigneeId" | "sortGroupId" | "sortGroupName" | "sortOrder"
+  >
 > & {
   recurrence?:
     | {
@@ -64,6 +78,22 @@ export type AttachPhotoInput = Pick<
   "fileName" | "mimeType" | "byteSize" | "storageKey" | "width" | "height" | "caption" | "sortOrder"
 >;
 
+export type AddAgentReviewInput = {
+  agentName: string;
+  body: string;
+  canHelp?: boolean;
+  helpKinds?: string[];
+  nextAction?: string;
+  confidence?: number;
+  data?: Record<string, unknown>;
+};
+
+export type TaskAgentReview = {
+  isFresh: boolean;
+  agentName: string | null;
+  reviewedAt: Date | null;
+};
+
 export type TaskWithContext = Task & {
   assignee: Person | null;
   createdBy: Person | null;
@@ -72,7 +102,33 @@ export type TaskWithContext = Task & {
   notes: TaskNote[];
   recurringRule: RecurringRule | null;
   annotations: AgentAnnotation[];
+  agentReview: TaskAgentReview;
   urgency: UrgencyBand;
+};
+
+export type SortBoardGroup = {
+  id: string;
+  name: string;
+  order: number;
+  taskCount: number;
+  tasks: TaskWithContext[];
+};
+
+export type SortBoard = {
+  view: "sort";
+  summary: {
+    taskCount: number;
+    groupCount: number;
+    looseCount: number;
+  };
+  groups: SortBoardGroup[];
+  loose: {
+    id: "loose";
+    name: "Loose tiles";
+    order: null;
+    taskCount: number;
+    tasks: TaskWithContext[];
+  };
 };
 
 export type NewEventInput = Omit<NewTaskEvent, "id" | "createdAt">;

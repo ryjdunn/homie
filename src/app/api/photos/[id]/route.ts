@@ -1,30 +1,42 @@
 import { getServices } from "@/server/api/context";
 import { jsonError } from "@/server/api/http";
-import { readPhoto } from "@/server/storage/photo-storage";
+import { isPhotoVariant, photoVariantContentType, readPhoto, readPhotoVariant } from "@/server/storage/photo-storage";
 import { missingPhotoTheme } from "@/app/theme";
+import { AppError } from "@/server/domain/errors";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+    const requestedVariant = new URL(request.url).searchParams.get("variant");
+    if (!isPhotoVariant(requestedVariant)) {
+      return jsonError(new AppError("Unsupported photo variant", 400, "validation_error"));
+    }
+    const variant = requestedVariant ?? "original";
     const photo = await getServices().tasks.getPhoto(id);
     let bytes: Buffer;
+    let contentType = photoVariantContentType(variant, photo.mimeType);
     try {
-      bytes = await readPhoto(photo.storageKey);
+      bytes = await readPhotoVariant(photo.storageKey, variant);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      return new Response(missingPhotoSvg(photo.fileName), {
-        headers: {
-          "content-type": "image/svg+xml; charset=utf-8",
-          "cache-control": "private, max-age=60",
-        },
-      });
+      if (variant !== "original" && (error as NodeJS.ErrnoException).code !== "ENOENT") {
+        bytes = await readPhoto(photo.storageKey);
+        contentType = photo.mimeType;
+      } else {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        return new Response(missingPhotoSvg(photo.fileName), {
+          headers: {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "cache-control": "private, max-age=60",
+          },
+        });
+      }
     }
     const body = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(body).set(bytes);
     return new Response(body, {
       headers: {
-        "content-type": photo.mimeType,
-        "cache-control": "private, max-age=3600",
+        "content-type": contentType,
+        "cache-control": variant === "original" ? "private, max-age=3600" : "private, max-age=86400",
       },
     });
   } catch (error) {

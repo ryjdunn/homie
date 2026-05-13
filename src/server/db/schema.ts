@@ -101,6 +101,9 @@ export const tasks = pgTable(
       (): AnyPgColumn => tasks.id,
       { onDelete: "set null" },
     ),
+    sortGroupId: text("sort_group_id"),
+    sortGroupName: text("sort_group_name"),
+    sortOrder: integer("sort_order").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -112,6 +115,8 @@ export const tasks = pgTable(
     index("tasks_category_idx").on(table.categoryId),
     index("tasks_assignee_idx").on(table.assigneeId),
     index("tasks_parent_idx").on(table.parentTaskId),
+    index("tasks_sort_group_idx").on(table.sortGroupId),
+    index("tasks_sort_order_idx").on(table.sortOrder),
   ],
 );
 

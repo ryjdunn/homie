@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentAnnotationSchema,
+  agentNoteSchema,
+  agentReviewSchema,
   annotationSchema,
   createTaskSchema,
   taskFilterSchema,
@@ -37,9 +40,11 @@ describe("API validation schemas", () => {
   it("normalizes time-sensitive query values", () => {
     expect(taskFilterSchema.parse({ timeSensitive: "true" }).timeSensitive).toBe(true);
     expect(taskFilterSchema.parse({ timeSensitive: "1" }).timeSensitive).toBe(true);
+    expect(taskFilterSchema.parse({ needsReview: "true" }).needsReview).toBe(true);
     expect(taskFilterSchema.parse({ plannedFor: "2026-04-27" }).plannedFor).toBe("2026-04-27");
     expect(() => taskFilterSchema.parse({ plannedFor: "tomorrow" })).toThrow();
     expect(taskFilterSchema.parse({}).timeSensitive).toBe(false);
+    expect(taskFilterSchema.parse({}).needsReview).toBe(false);
   });
 
   it("accepts structured agent annotation payloads", () => {
@@ -50,5 +55,29 @@ describe("API validation schemas", () => {
       data: { confidence: 0.9 },
     });
     expect(parsed.data.confidence).toBe(0.9);
+  });
+
+  it("accepts agent-owned note and annotation payloads", () => {
+    expect(agentNoteSchema.parse({ body: "Drafted return instructions." }).body).toBe("Drafted return instructions.");
+    const parsed = agentAnnotationSchema.parse({
+      kind: "review",
+      body: "Looked at the task and found no blocker.",
+      data: { source: "discord-request" },
+    });
+    expect(parsed.agentName).toBeUndefined();
+    expect(parsed.data.source).toBe("discord-request");
+  });
+
+  it("accepts the small OpenClaw review contract", () => {
+    const parsed = agentReviewSchema.parse({
+      body: "Can help with a return lookup.",
+      canHelp: true,
+      helpKinds: ["return", "research"],
+      nextAction: "ask_user",
+      confidence: 0.84,
+    });
+    expect(parsed.helpKinds).toEqual(["return", "research"]);
+    expect(parsed.nextAction).toBe("ask_user");
+    expect(agentReviewSchema.parse({}).body).toBe("OpenClaw reviewed this task.");
   });
 });

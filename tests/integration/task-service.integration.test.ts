@@ -128,6 +128,91 @@ describe("TaskService against Postgres", () => {
 
   });
 
+  it("returns the sort board as ordered groups with loose tiles last", async () => {
+    await services.tasks.createTask(
+      {
+        title: "Donate shoes",
+        description: "",
+        priority: "normal",
+        dueAt: null,
+        categoryId: "cat_sell_donate",
+        assigneeId: "person_caroline",
+        createdById: "person_ryan",
+        sortGroupId: "sort_group_donate",
+        sortGroupName: "Donate",
+        sortOrder: 220,
+      },
+      { type: "human", personId: "person_ryan" },
+    );
+    await services.tasks.createTask(
+      {
+        title: "Donate towels",
+        description: "",
+        priority: "normal",
+        dueAt: null,
+        categoryId: "cat_sell_donate",
+        assigneeId: "person_caroline",
+        createdById: "person_ryan",
+        sortGroupId: "sort_group_donate",
+        sortGroupName: "Donate",
+        sortOrder: 210,
+      },
+      { type: "human", personId: "person_ryan" },
+    );
+    await services.tasks.createTask(
+      {
+        title: "Scope garage fridge",
+        description: "",
+        priority: "normal",
+        dueAt: null,
+        categoryId: "cat_house",
+        assigneeId: "person_ryan",
+        createdById: "person_ryan",
+        sortGroupId: "sort_group_garage",
+        sortGroupName: "Garage",
+        sortOrder: 100,
+      },
+      { type: "human", personId: "person_ryan" },
+    );
+    const loose = await services.tasks.createTask(
+      {
+        title: "Loose errand",
+        description: "",
+        priority: "low",
+        dueAt: null,
+        categoryId: "cat_errands",
+        assigneeId: "person_unassigned",
+        createdById: "person_ryan",
+        sortOrder: 20,
+      },
+      { type: "human", personId: "person_ryan" },
+    );
+    const done = await services.tasks.createTask(
+      {
+        title: "Already done",
+        description: "",
+        priority: "normal",
+        dueAt: null,
+        categoryId: "cat_house",
+        assigneeId: "person_ryan",
+        createdById: "person_ryan",
+        sortGroupId: "sort_group_garage",
+        sortGroupName: "Garage",
+        sortOrder: 90,
+      },
+      { type: "human", personId: "person_ryan" },
+    );
+    await services.tasks.completeTask(done.id, { type: "human", personId: "person_ryan" });
+
+    const board = await services.tasks.getSortBoard();
+
+    expect(board.summary).toMatchObject({ taskCount: 4, groupCount: 2, looseCount: 1 });
+    expect(board.groups.map((group) => group.name)).toEqual(["Garage", "Donate"]);
+    expect(board.groups[1].tasks.map((task) => task.title)).toEqual(["Donate towels", "Donate shoes"]);
+    expect(board.loose).toMatchObject({ id: "loose", name: "Loose tiles", taskCount: 1 });
+    expect(board.loose.tasks.map((task) => task.id)).toEqual([loose.id]);
+  });
+
   it("supports exact status filters and archived inclusion", async () => {
     const task = await services.tasks.createTask(
       {
@@ -194,17 +279,47 @@ describe("TaskService against Postgres", () => {
       },
       { type: "human", personId: "person_ryan" },
     );
-    const annotation = await services.tasks.addAgentAnnotation(task.id, {
+    const metadataAnnotation = await services.tasks.addAgentAnnotation(task.id, {
       agentName: "openclaw",
       kind: "research",
+      body: "Metadata only; this should not drive the review marker.",
+    });
+    const metadataOnly = await services.tasks.getTask(task.id);
+    expect(metadataOnly.agentReview.isFresh).toBe(false);
+
+    const needsReviewBefore = await services.tasks.listTasks({ status: "open", needsReview: true });
+    expect(needsReviewBefore.map((item) => item.id)).toContain(task.id);
+
+    const annotation = await services.tasks.addAgentReview(task.id, {
+      agentName: "openclaw",
       body: "Potential batch with linen closet cleanup.",
-      data: { confidence: 0.82 },
+      canHelp: true,
+      helpKinds: ["research"],
+      nextAction: "research",
+      confidence: 0.82,
     });
 
     const hydrated = await services.tasks.getTask(task.id);
     expect(hydrated.notes[0]?.id).toBe(note.id);
     expect(hydrated.photos[0]?.id).toBe(photo.id);
-    expect(hydrated.annotations[0]?.id).toBe(annotation.id);
+    expect(hydrated.annotations.map((item) => item.id)).toEqual(expect.arrayContaining([metadataAnnotation.id, annotation.id]));
+    expect(hydrated.annotations.find((item) => item.id === annotation.id)?.kind).toBe("review");
+    expect(hydrated.agentReview).toMatchObject({
+      isFresh: true,
+      agentName: "openclaw",
+    });
+
+    const needsReviewAfter = await services.tasks.listTasks({ status: "open", needsReview: true });
+    expect(needsReviewAfter.map((item) => item.id)).not.toContain(task.id);
+
+    const changedAfterReview = await services.tasks.updateTask(
+      task.id,
+      { priority: "high" },
+      { type: "human", personId: "person_ryan" },
+    );
+    expect(changedAfterReview.agentReview.isFresh).toBe(false);
+    const needsReviewAfterChange = await services.tasks.listTasks({ status: "open", needsReview: true });
+    expect(needsReviewAfterChange.map((item) => item.id)).toContain(task.id);
 
     const events = await services.tasks.listEvents();
     expect(events.map((event) => event.eventType)).toEqual(

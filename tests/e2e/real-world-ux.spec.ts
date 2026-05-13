@@ -6,6 +6,7 @@ const png = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
   "base64",
 );
+const e2eAgentHeaders = { authorization: "Bearer e2e-agent-token" };
 
 type ApiEnvelope<T> = { ok: true; data: T } | { ok: false; error: { message: string } };
 
@@ -17,6 +18,11 @@ type ApiTask = {
   plannedFor: string | null;
   categoryId: string;
   assigneeId: string | null;
+  agentReview?: {
+    isFresh: boolean;
+    agentName: string | null;
+    reviewedAt: string | null;
+  };
 };
 
 type TaskInput = {
@@ -195,6 +201,10 @@ test.describe("real-world mobile UX and database validation", () => {
       const response = await page.request.get(`/api/photos/${rows[0]?.id}`);
       expect(response.ok()).toBe(true);
       expect(response.headers()["content-type"]).toContain("image/png");
+
+      const thumbnailResponse = await page.request.get(`/api/photos/${rows[0]?.id}?variant=thumb`);
+      expect(thumbnailResponse.ok()).toBe(true);
+      expect(thumbnailResponse.headers()["content-type"]).toContain("image/webp");
     });
   });
 
@@ -713,10 +723,11 @@ test.describe("real-world mobile UX and database validation", () => {
     });
 
     const task = await getTaskByTitle(title);
-    const agentTasks = await apiGet<{ title: string }[]>(page, "/api/agent/tasks?status=open");
+    const agentTasks = await apiGet<{ title: string }[]>(page, "/api/agent/tasks?status=open", e2eAgentHeaders);
     expect(agentTasks.some((item) => item.title === title)).toBe(true);
 
     const annotationResponse = await page.request.post(`/api/agent/tasks/${task.id}/annotations`, {
+      headers: e2eAgentHeaders,
       data: {
         agentName: "openclaw-e2e",
         kind: "research",
@@ -726,8 +737,114 @@ test.describe("real-world mobile UX and database validation", () => {
     });
     expect(annotationResponse.ok()).toBe(true);
 
-    const events = await apiGet<{ eventType: string; agentName: string | null }[]>(page, "/api/agent/events?limit=50");
+    const events = await apiGet<{ eventType: string; agentName: string | null }[]>(page, "/api/agent/events?limit=50", e2eAgentHeaders);
     expect(events.some((event) => event.eventType === "annotation_added" && event.agentName === "openclaw-e2e")).toBe(true);
+  });
+
+  test("agent write APIs keep provenance and drive the fresh Claw review marker", async ({ page }, testInfo) => {
+    const title = uniqueTitle("E2E agent basics", testInfo);
+    const agentHeaders = { ...e2eAgentHeaders, "x-homie-agent-name": "openclaw" };
+
+    const createResponse = await page.request.post("/api/agent/tasks", {
+      headers: agentHeaders,
+      data: {
+        title,
+        description: "Created by the agent API after a Discord request.",
+        categoryId: "cat_sell_donate",
+        assigneeId: "person_ryan",
+        createdById: "person_ryan",
+        priority: "normal",
+      },
+    });
+    expect(createResponse.ok()).toBe(true);
+    const created = (await createResponse.json()) as ApiEnvelope<ApiTask>;
+    if (!created.ok) throw new Error(created.error.message);
+
+    const noteResponse = await page.request.post(`/api/agent/tasks/${created.data.id}/notes`, {
+      headers: agentHeaders,
+      data: { body: "Agent-visible note from the write API." },
+    });
+    expect(noteResponse.ok()).toBe(true);
+
+    const needsReviewBefore = await apiGet<ApiTask[]>(page, "/api/agent/tasks?status=open&needsReview=true", agentHeaders);
+    expect(needsReviewBefore.some((item) => item.id === created.data.id)).toBe(true);
+
+    const reviewResponse = await page.request.post(`/api/agent/tasks/${created.data.id}/review`, {
+      headers: agentHeaders,
+      data: {
+        body: "Claw looked at the task and it is ready to show as reviewed.",
+        canHelp: true,
+        helpKinds: ["return", "research"],
+        nextAction: "ask_user",
+        confidence: 0.77,
+        data: { source: "discord" },
+      },
+    });
+    expect(reviewResponse.ok()).toBe(true);
+
+    const needsReviewAfter = await apiGet<ApiTask[]>(page, "/api/agent/tasks?status=open&needsReview=true", agentHeaders);
+    expect(needsReviewAfter.some((item) => item.id === created.data.id)).toBe(false);
+
+    await gotoAll(page);
+    await expect(taskCard(page, title).getByLabel("Reviewed by Claw")).toBeVisible();
+
+    const patchResponse = await page.request.patch(`/api/agent/tasks/${created.data.id}`, {
+      headers: agentHeaders,
+      data: { priority: "high" },
+    });
+    expect(patchResponse.ok()).toBe(true);
+
+    await gotoAll(page);
+    await expect(taskCard(page, title).getByLabel("Reviewed by Claw")).toHaveCount(0);
+
+    const secondReviewResponse = await page.request.post(`/api/agent/tasks/${created.data.id}/review`, {
+      headers: agentHeaders,
+      data: {
+        body: "Claw re-reviewed the task after the change.",
+      },
+    });
+    expect(secondReviewResponse.ok()).toBe(true);
+
+    await gotoAll(page);
+    await expect(taskCard(page, title).getByLabel("Reviewed by Claw")).toBeVisible();
+
+    const completedResponse = await page.request.post(`/api/agent/tasks/${created.data.id}/complete`, {
+      headers: agentHeaders,
+    });
+    expect(completedResponse.ok()).toBe(true);
+    const reopenedResponse = await page.request.post(`/api/agent/tasks/${created.data.id}/reopen`, {
+      headers: agentHeaders,
+    });
+    expect(reopenedResponse.ok()).toBe(true);
+
+    const fetched = await apiGet<ApiTask>(page, `/api/agent/tasks/${created.data.id}`, e2eAgentHeaders);
+    expect(fetched.status).toBe("active");
+    expect(fetched.priority).toBe("high");
+    expect(fetched.agentReview?.isFresh).toBe(false);
+
+    await withDb(async (sql) => {
+      const noteRows = await sql`
+        select author_type, agent_name
+        from task_notes
+        where task_id = ${created.data.id}
+      `;
+      expect(noteRows[0]).toMatchObject({ author_type: "agent", agent_name: "openclaw" });
+
+      const eventRows = await sql`
+        select event_type, actor_type, agent_name
+        from task_events
+        where task_id = ${created.data.id}
+        order by created_at asc
+      `;
+      expect(eventRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ event_type: "created", actor_type: "agent", agent_name: "openclaw" }),
+          expect.objectContaining({ event_type: "updated", actor_type: "agent", agent_name: "openclaw" }),
+          expect.objectContaining({ event_type: "completed", actor_type: "agent", agent_name: "openclaw" }),
+          expect.objectContaining({ event_type: "reopened", actor_type: "agent", agent_name: "openclaw" }),
+        ]),
+      );
+    });
   });
 
   test("core mobile controls keep comfortable tap targets after scrolling", async ({ page }) => {
@@ -865,8 +982,8 @@ async function createTaskViaApi(page: Page, input: TaskInput) {
   return payload.data;
 }
 
-async function apiGet<T>(page: Page, path: string) {
-  const response = await page.request.get(path);
+async function apiGet<T>(page: Page, path: string, headers: Record<string, string> = {}) {
+  const response = await page.request.get(path, { headers });
   expect(response.ok()).toBe(true);
   const payload = (await response.json()) as ApiEnvelope<T>;
   if (!payload.ok) throw new Error(payload.error.message);

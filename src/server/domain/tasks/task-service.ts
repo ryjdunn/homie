@@ -1,11 +1,13 @@
-import type { Task } from "@/server/db/schema";
+import type { AgentAnnotation, Task } from "@/server/db/schema";
 import { calculateNextDueAt, toDateOnly } from "@/server/domain/recurrence";
 import { AppError, notFound } from "@/server/domain/errors";
 import { getUrgencyBand, isTimeSensitive } from "@/server/domain/tasks/urgency";
 import type {
+  AddAgentReviewInput,
   AddNoteInput,
   AttachPhotoInput,
   CreateTaskInput,
+  SortBoard,
   TaskActor,
   TaskFilters,
   TaskWithContext,
@@ -53,8 +55,14 @@ export class TaskService {
 
   async listTasks(filters: TaskFilters = {}, now = new Date()) {
     const rows = await this.repo.listTasks(filters);
-    const hydrated = await this.hydrate(rows, now);
-    return filters.timeSensitive ? hydrated.filter((task) => isTimeSensitive(task, now)) : hydrated;
+    let hydrated = await this.hydrate(rows, now);
+    if (filters.timeSensitive) {
+      hydrated = hydrated.filter((task) => isTimeSensitive(task, now));
+    }
+    if (filters.needsReview) {
+      hydrated = hydrated.filter((task) => !task.agentReview.isFresh);
+    }
+    return hydrated;
   }
 
   async getTask(id: string, now = new Date()) {
@@ -65,6 +73,56 @@ export class TaskService {
 
     const [hydrated] = await this.hydrate([task], now);
     return hydrated;
+  }
+
+  async getSortBoard(filters: TaskFilters = {}, now = new Date()): Promise<SortBoard> {
+    const tasks = await this.listTasks({ ...filters, status: "open", includeArchived: false }, now);
+    const sortedTasks = [...tasks].sort(sortBoardTasks);
+    const groupsById = new Map<string, { id: string; name: string; order: number; tasks: TaskWithContext[] }>();
+    const looseTasks: TaskWithContext[] = [];
+
+    for (const task of sortedTasks) {
+      if (!task.sortGroupId) {
+        looseTasks.push(task);
+        continue;
+      }
+
+      const group = groupsById.get(task.sortGroupId) ?? {
+        id: task.sortGroupId,
+        name: task.sortGroupName || "New pile",
+        order: task.sortOrder,
+        tasks: [],
+      };
+      group.name = task.sortGroupName || group.name;
+      group.order = Math.min(group.order, task.sortOrder);
+      group.tasks.push(task);
+      groupsById.set(task.sortGroupId, group);
+    }
+
+    const groups = [...groupsById.values()]
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name))
+      .map((group) => ({
+        ...group,
+        taskCount: group.tasks.length,
+        tasks: group.tasks.sort(sortBoardTasks),
+      }));
+
+    return {
+      view: "sort",
+      summary: {
+        taskCount: sortedTasks.length,
+        groupCount: groups.length,
+        looseCount: looseTasks.length,
+      },
+      groups,
+      loose: {
+        id: "loose",
+        name: "Loose tiles",
+        order: null,
+        taskCount: looseTasks.length,
+        tasks: looseTasks,
+      },
+    };
   }
 
   async createTask(input: CreateTaskInput, actor: TaskActor) {
@@ -87,6 +145,9 @@ export class TaskService {
       completedAt: null,
       completedById: null,
       parentTaskId: null,
+      sortGroupId: input.sortGroupId ?? null,
+      sortGroupName: input.sortGroupName ?? null,
+      sortOrder: input.sortOrder ?? 0,
     });
 
     await this.repo.addEvent({
@@ -129,6 +190,10 @@ export class TaskService {
 
     if (patch.description !== undefined && patch.description.length > 4000) {
       throw new AppError("Description is too long", 422, "validation_error");
+    }
+
+    if (patch.sortGroupName !== undefined) {
+      patch.sortGroupName = patch.sortGroupName?.trim() || null;
     }
 
     const task = await this.repo.updateTask(id, patch);
@@ -289,6 +354,7 @@ export class TaskService {
       authorPersonId: input.authorPersonId ?? null,
       agentName: input.agentName ?? null,
     });
+    await this.repo.touchTask(id);
 
     await this.repo.addEvent({
       taskId: id,
@@ -307,6 +373,7 @@ export class TaskService {
       caption: input.caption ?? "",
       sortOrder: input.sortOrder ?? 0,
     });
+    await this.repo.touchTask(id);
 
     await this.repo.addEvent({
       taskId: id,
@@ -341,6 +408,27 @@ export class TaskService {
     });
 
     return annotation;
+  }
+
+  async addAgentReview(id: string, input: AddAgentReviewInput) {
+    const data: Record<string, unknown> = {
+      ...input.data,
+      helpKinds: input.helpKinds ?? [],
+      nextAction: input.nextAction ?? "none",
+    };
+    if (input.canHelp !== undefined) {
+      data.canHelp = input.canHelp;
+    }
+    if (input.confidence !== undefined) {
+      data.confidence = input.confidence;
+    }
+
+    return this.addAgentAnnotation(id, {
+      agentName: input.agentName,
+      kind: "review",
+      body: input.body,
+      data,
+    });
   }
 
   async listEvents(limit = 100) {
@@ -388,6 +476,7 @@ export class TaskService {
       if (!category) {
         throw new AppError(`Task ${task.id} is missing its category`, 500, "data_integrity_error");
       }
+      const taskAnnotations = annotationsByTask.get(task.id) ?? [];
 
       return {
         ...task,
@@ -397,7 +486,8 @@ export class TaskService {
         photos: photosByTask.get(task.id) ?? [],
         notes: notesByTask.get(task.id) ?? [],
         recurringRule: rulesByTask.get(task.id) ?? null,
-        annotations: annotationsByTask.get(task.id) ?? [],
+        annotations: taskAnnotations,
+        agentReview: openClawReviewState(task, taskAnnotations),
         urgency: getUrgencyBand(task, now),
       };
     });
@@ -413,4 +503,35 @@ function groupBy<T>(items: T[], keyFn: (item: T) => string) {
     grouped.set(key, group);
   }
   return grouped;
+}
+
+function sortBoardTasks(left: TaskWithContext, right: TaskWithContext) {
+  const leftGroup = left.sortGroupId ?? "";
+  const rightGroup = right.sortGroupId ?? "";
+  return (
+    leftGroup.localeCompare(rightGroup) ||
+    left.sortOrder - right.sortOrder ||
+    left.createdAt.getTime() - right.createdAt.getTime() ||
+    left.title.localeCompare(right.title)
+  );
+}
+
+function openClawReviewState(task: Task, annotations: AgentAnnotation[]) {
+  const latest = annotations
+    .filter((annotation) => annotation.kind === "review" && annotation.agentName.trim().toLowerCase().startsWith("openclaw"))
+    .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())[0];
+
+  if (!latest) {
+    return {
+      isFresh: false,
+      agentName: null,
+      reviewedAt: null,
+    };
+  }
+
+  return {
+    isFresh: latest.createdAt.getTime() >= task.updatedAt.getTime(),
+    agentName: latest.agentName,
+    reviewedAt: latest.createdAt,
+  };
 }

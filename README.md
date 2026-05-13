@@ -58,10 +58,10 @@ Run the local dev server:
 bash scripts/dev.sh
 ```
 
-The dev script starts Homebrew Postgres, prepares `homie_dev`, and serves Homie on all local interfaces. By default Next chooses port `3000`; if you want the shared side-browser/Tailscale port used during this build, run:
+The dev script starts Homebrew Postgres, prepares `homie_dev`, and serves Homie on localhost. By default Next chooses port `3000`; if you want the shared side-browser/Tailscale port used during this build, run:
 
 ```bash
-PORT=3100 DATABASE_URL=postgres://localhost:5432/homie_dev npm run dev -- --hostname 0.0.0.0
+PORT=3100 DATABASE_URL=postgres://localhost:5432/homie_dev npm run dev -- --hostname 127.0.0.1
 ```
 
 Dedicated Playwright dev server:
@@ -78,7 +78,7 @@ The recommended Mac Studio setup is native Homebrew Postgres plus a user-level `
 ./setup.sh
 ```
 
-That script checks dependencies, writes `.env` if needed, prepares Postgres, builds the app, installs `~/Library/LaunchAgents/com.ryandunn.homie.plist`, starts Homie on `0.0.0.0:3000`, and verifies `/api/health`.
+That script checks dependencies, writes `.env` if needed, prepares Postgres, builds the app, installs `~/Library/LaunchAgents/com.ryandunn.homie.plist`, starts Homie on `127.0.0.1:3000`, and verifies `/api/health`.
 
 Detailed instructions live in [docs/mac-mini-setup.md](./docs/mac-mini-setup.md). Despite the historical filename, it covers both Mac Studio and Mac mini.
 
@@ -95,17 +95,17 @@ Useful install variants:
 For a quick dev share to a phone on the same tailnet:
 
 ```bash
-PORT=3100 DATABASE_URL=postgres://localhost:5432/homie_dev npm run dev -- --hostname 0.0.0.0
-tailscale serve --bg 3100
+PORT=3100 DATABASE_URL=postgres://localhost:5432/homie_dev npm run dev -- --hostname 127.0.0.1
+tailscale serve --bg http://127.0.0.1:3100
 tailscale serve status
 ```
 
 If Next blocks dev resources for the Tailscale hostname, add that hostname to `allowedDevOrigins` in [next.config.ts](./next.config.ts) and restart the dev server.
 
-For the Mac Studio production service, use the host and port printed by `./setup.sh`, or put Tailscale Serve in front of the configured port:
+For the Mac Studio production service, keep Homie bound to localhost and put Tailscale Serve in front of it:
 
 ```bash
-tailscale serve --bg 3000
+tailscale serve --bg http://127.0.0.1:3000
 ```
 
 Disable Tailscale Serve later with:
@@ -174,13 +174,15 @@ Human UI routes live under:
 - `/api/tasks/:id/reopen`
 - `/api/photos/:id`
 
-Agent-facing routes live under `/api/agent/*` and are documented in [docs/agent-api.md](./docs/agent-api.md).
+Agent-facing routes live under `/api/agent/*` and are documented in [docs/agent-api.md](./docs/agent-api.md). The intended OpenClaw tool shape is summarized in [docs/openclaw-integration.md](./docs/openclaw-integration.md).
 
 If `HOMIE_AGENT_TOKEN` is set, agent routes require:
 
 ```text
 Authorization: Bearer <token>
 ```
+
+Agent routes support task reads, event reads, authenticated task creation/updates, notes, photos, completion/reopen, structured reviews, and advanced annotations. OpenClaw reviews drive the small lobster review marker in the UI; the marker clears whenever the task changes and returns after OpenClaw reviews it again.
 
 ## Runtime Files
 

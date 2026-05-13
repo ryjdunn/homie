@@ -122,3 +122,11 @@ Homie lightly tracks provenance:
 - task events: created, updated, completed, reopened, note/photo/annotation added, recurrence scheduled
 
 The UI surfaces this as `Added by Ryan/Caroline` on task cards and the detail sheet, and as the person name above each note.
+
+## OpenClaw Review Marker
+
+When OpenClaw posts a review to a task, Homie treats that as "Claw looked at this." Task responses include an `agentReview` object with freshness state.
+
+The task card and detail sheet show a small lobster marker only while the latest OpenClaw `review` annotation is fresh. Any card-changing mutation updates `tasks.updated_at`, including edits, scheduling, completion/reopen, notes, and photos. If the task changes after Claw looked at it, the lobster disappears until OpenClaw reviews the task again.
+
+The marker is not an in-app conversation channel. For now, OpenClaw talks with Ryan through Discord and uses Homie's API only for deliberate task creation, task updates, completion/reopen, durable notes, photos, structured reviews, and advanced annotations.

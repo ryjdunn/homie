@@ -33,12 +33,13 @@ The script:
 - Installs and starts `~/Library/LaunchAgents/com.ryandunn.homie.plist`.
 - Verifies `/api/health`.
 
-After setup, Homie listens on:
+After setup, Homie listens locally on:
 
 ```text
 http://127.0.0.1:3000
-http://<mac-studio-tailscale-name-or-ip>:3000
 ```
+
+Use Tailscale Serve to expose that local service to the family tailnet.
 
 ## Environment
 
@@ -51,8 +52,8 @@ DATABASE_URL=postgres://localhost:5432/homie
 HOMIE_UPLOAD_DIR=./data/uploads
 HOMIE_AGENT_TOKEN=<generated>
 HOMIE_DB_POOL_SIZE=10
-HOMIE_HOST=0.0.0.0
-HOSTNAME=0.0.0.0
+HOMIE_HOST=127.0.0.1
+HOSTNAME=127.0.0.1
 PORT=3000
 ```
 
@@ -84,24 +85,14 @@ Use a custom database or upload directory:
 DATABASE_URL=postgres://localhost:5432/homie_prod HOMIE_UPLOAD_DIR=/Users/ryandunn/homie-uploads ./setup.sh
 ```
 
-Use a custom bind host:
-
-```bash
-HOMIE_HOST=0.0.0.0 ./setup.sh
-```
+Use a custom bind host only when you intentionally want non-tailnet access. Binding to all interfaces exposes Homie on the regular LAN as well as Tailscale, so prefer the default localhost bind for the family tailnet setup.
 
 ## Tailscale Access
 
-For direct tailnet access without Tailscale Serve, open:
-
-```text
-http://<mac-studio-tailscale-name-or-ip>:3000
-```
-
-To put Tailscale Serve in front of the app:
+Put Tailscale Serve in front of the localhost app:
 
 ```bash
-tailscale serve --bg 3000
+tailscale serve --bg http://127.0.0.1:3000
 tailscale serve status
 ```
 
@@ -224,7 +215,7 @@ If the phone cannot reach it over Tailscale:
 ```bash
 tailscale status
 curl http://127.0.0.1:3000/api/health
-curl http://$(tailscale ip -4):3000/api/health
+tailscale serve status
 ```
 
 If using Tailscale Serve:

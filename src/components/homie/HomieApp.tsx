@@ -8,10 +8,12 @@ import {
   Circle,
   ClipboardCheck,
   Flag,
+  FolderInput,
   ImagePlus,
   Inbox,
   Link2,
   ListFilter,
+  Menu,
   Pencil,
   Plus,
   RefreshCw,
@@ -19,11 +21,10 @@ import {
   Send,
   Settings,
   Trash2,
-  Undo2,
   X,
 } from "lucide-react";
-import type { FormEvent, ReactNode, TouchEvent } from "react";
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import type { FormEvent, PointerEvent as ReactPointerEvent, ReactNode, TouchEvent } from "react";
+import { Fragment, startTransition, useEffect, useMemo, useRef, useState } from "react";
 import clsx from "clsx";
 import { defaultThemeId, isHomieThemeId, themeOptions, type HomieThemeId } from "@/app/theme";
 
@@ -60,6 +61,15 @@ type TaskNote = {
   createdAt: string;
 };
 
+type AgentAnnotation = {
+  id: string;
+  agentName: string;
+  kind: string;
+  body: string;
+  data: Record<string, unknown>;
+  createdAt: string;
+};
+
 type RecurrenceFrequency = "daily" | "weekly" | "every_n_days" | "monthly";
 
 type Task = {
@@ -72,14 +82,24 @@ type Task = {
   plannedFor: string | null;
   completedAt: string | null;
   createdAt: string;
+  updatedAt: string;
   assigneeId: string | null;
   createdById: string | null;
   categoryId: string;
+  sortGroupId: string | null;
+  sortGroupName: string | null;
+  sortOrder: number;
   assignee: Person | null;
   createdBy: Person | null;
   category: Category;
   photos: TaskPhoto[];
   notes: TaskNote[];
+  annotations: AgentAnnotation[];
+  agentReview: {
+    isFresh: boolean;
+    agentName: string | null;
+    reviewedAt: string | null;
+  };
   recurringRule: {
     id: string;
     frequency: RecurrenceFrequency;
@@ -98,7 +118,52 @@ type Bootstrap = {
   defaultPersonId: string;
 };
 
-type ViewMode = "today" | "week" | "all" | "add" | "done";
+type ViewMode = "today" | "week" | "sort" | "all" | "add";
+
+type SortUpdate = {
+  id: string;
+  sortGroupId: string | null;
+  sortGroupName: string | null;
+  sortOrder: number;
+};
+
+type DragPreview = {
+  task: Task;
+  x: number;
+  y: number;
+};
+
+type GroupDragPreview = {
+  name: string;
+  count: number;
+  x: number;
+  y: number;
+};
+
+type SortDropPreview = {
+  laneId: string;
+  beforeTaskId: string | null;
+  groupTaskId: string | null;
+  mode: "insert" | "group";
+};
+
+type DragStartState = {
+  id: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  started: boolean;
+};
+
+type ActivePointerEvent = {
+  pointerId: number;
+  clientX: number;
+  clientY: number;
+  preventDefault: () => void;
+};
+
+const GROUP_ORDER_STEP = 100000;
+const TILE_ORDER_STEP = 1000;
 
 const priorityLabels = {
   low: "Low",
@@ -191,8 +256,8 @@ export function HomieApp() {
 
   const visibleTasks = useMemo(() => {
     return tasks.filter((task) => {
-      if (view === "done") return task.status === "done";
       if (view === "add" || view === "today" || view === "week") return false;
+      if (view === "sort") return task.status !== "done" && task.status !== "archived";
       if (task.status === "done") return false;
       if (categoryFilter !== "all" && task.categoryId !== categoryFilter) return false;
       if (assigneeFilter !== "all" && task.assigneeId !== assigneeFilter) return false;
@@ -200,6 +265,17 @@ export function HomieApp() {
       return true;
     });
   }, [assigneeFilter, categoryFilter, tasks, timeSensitiveOnly, view]);
+
+  const completedTasks = useMemo(() => {
+    return tasks
+      .filter((task) => {
+        if (task.status !== "done") return false;
+        if (categoryFilter !== "all" && task.categoryId !== categoryFilter) return false;
+        if (assigneeFilter !== "all" && task.assigneeId !== assigneeFilter) return false;
+        return true;
+      })
+      .sort((first, second) => (second.completedAt ?? second.updatedAt).localeCompare(first.completedAt ?? first.updatedAt));
+  }, [assigneeFilter, categoryFilter, tasks]);
 
   async function completeTask(task: Task) {
     setBusyTaskId(task.id);
@@ -281,6 +357,34 @@ export function HomieApp() {
         },
         body: JSON.stringify({ plannedFor }),
       });
+      await refresh();
+    } catch (nextError) {
+      setError((nextError as Error).message);
+    } finally {
+      setBusyTaskId(null);
+    }
+  }
+
+  async function sortTasks(updates: SortUpdate[]) {
+    if (!updates.length) return;
+    setBusyTaskId(updates[0]?.id ?? null);
+    try {
+      await Promise.all(
+        updates.map((update) =>
+          api(`/api/tasks/${update.id}`, {
+            method: "PATCH",
+            headers: {
+              "content-type": "application/json",
+              ...personHeaders(currentPersonId),
+            },
+            body: JSON.stringify({
+              sortGroupId: update.sortGroupId,
+              sortGroupName: update.sortGroupName,
+              sortOrder: update.sortOrder,
+            }),
+          }),
+        ),
+      );
       await refresh();
     } catch (nextError) {
       setError((nextError as Error).message);
@@ -377,8 +481,8 @@ export function HomieApp() {
           <nav className="mode-tabs" aria-label="Main navigation" style={{ height: 54, margin: "16px auto 0" }}>
             <NavButton icon={<CalendarClock size={18} />} label="Today" active={view === "today"} onClick={() => setView("today")} />
             <NavButton icon={<CalendarDays size={18} />} label="Week" active={view === "week"} onClick={() => setView("week")} />
-            <NavButton icon={<ListFilter size={18} />} label="All" active={view === "all"} onClick={() => setView("all")} />
-            <NavButton icon={<ClipboardCheck size={18} />} label="Done" active={view === "done"} onClick={() => setView("done")} />
+            <NavButton icon={<ListFilter size={18} />} label="Sort" active={view === "sort"} onClick={() => setView("sort")} />
+            <NavButton icon={<ClipboardCheck size={18} />} label="All" active={view === "all"} onClick={() => setView("all")} />
           </nav>
         ) : null}
       </section>
@@ -435,45 +539,51 @@ export function HomieApp() {
           onComplete={completeTask}
           onReopen={reopenTask}
         />
+      ) : view === "sort" ? (
+        <SortBoard
+          tasks={visibleTasks}
+          busyTaskId={busyTaskId}
+          recentlyCompletedId={recentlyCompletedId}
+          onOpen={(task) => openTaskDetail(task.id)}
+          onComplete={completeTask}
+          onReopen={reopenTask}
+          onSortTasks={sortTasks}
+        />
       ) : (
         <>
           <section className="view-head">
             <div>
-              <p className="eyebrow">{view === "done" ? "Recent wins" : "All tasks"}</p>
+              <p className="eyebrow">All tasks</p>
               <h2>{viewTitle(view, visibleTasks.length)}</h2>
             </div>
-            {view === "all" ? (
-              <button
-                className={clsx("icon-toggle", timeSensitiveOnly && "is-on")}
-                type="button"
-                onClick={() => setTimeSensitiveOnly((value) => !value)}
-                aria-label="Filter time-sensitive tasks"
-              >
-                <CalendarClock size={20} />
-              </button>
-            ) : null}
+            <button
+              className={clsx("icon-toggle", timeSensitiveOnly && "is-on")}
+              type="button"
+              onClick={() => setTimeSensitiveOnly((value) => !value)}
+              aria-label="Filter time-sensitive tasks"
+            >
+              <CalendarClock size={20} />
+            </button>
           </section>
 
-          {view === "all" ? (
-            <section className="filter-strip" aria-label="Task filters">
-              <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Category filter">
-                <option value="all">All categories</option>
-                {bootstrap.categories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.name}
-                  </option>
-                ))}
-              </select>
-              <select value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} aria-label="Assignee filter">
-                <option value="all">Everyone</option>
-                {bootstrap.people.map((person) => (
-                  <option key={person.id} value={person.id}>
-                    {person.name}
-                  </option>
-                ))}
-              </select>
-            </section>
-          ) : null}
+          <section className="filter-strip" aria-label="Task filters">
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Category filter">
+              <option value="all">All categories</option>
+              {bootstrap.categories.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+            <select value={assigneeFilter} onChange={(event) => setAssigneeFilter(event.target.value)} aria-label="Assignee filter">
+              <option value="all">Everyone</option>
+              {bootstrap.people.map((person) => (
+                <option key={person.id} value={person.id}>
+                  {person.name}
+                </option>
+              ))}
+            </select>
+          </section>
 
           <section className="task-stack" aria-label="Tasks">
             {visibleTasks.length ? (
@@ -492,6 +602,14 @@ export function HomieApp() {
               <EmptyState view={view} />
             )}
           </section>
+          <DoneArchive
+            tasks={completedTasks}
+            busyTaskId={busyTaskId}
+            recentlyCompletedId={recentlyCompletedId}
+            onOpen={(task) => openTaskDetail(task.id)}
+            onComplete={completeTask}
+            onReopen={reopenTask}
+          />
         </>
       )}
 
@@ -787,6 +905,748 @@ function TaskGroupSection({
   );
 }
 
+function SortBoard({
+  tasks,
+  busyTaskId,
+  recentlyCompletedId,
+  onOpen,
+  onComplete,
+  onReopen,
+  onSortTasks,
+}: {
+  tasks: Task[];
+  busyTaskId: string | null;
+  recentlyCompletedId: string | null;
+  onOpen: (task: Task) => void;
+  onComplete: (task: Task) => void;
+  onReopen: (task: Task) => void;
+  onSortTasks: (updates: SortUpdate[]) => Promise<void>;
+}) {
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [groupTargetId, setGroupTargetId] = useState<string | null>(null);
+  const [dropPreview, setDropPreview] = useState<SortDropPreview | null>(null);
+  const [dragPreview, setDragPreview] = useState<DragPreview | null>(null);
+  const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
+  const [groupDropBeforeId, setGroupDropBeforeId] = useState<string | null>(null);
+  const [groupDragPreview, setGroupDragPreview] = useState<GroupDragPreview | null>(null);
+  const [quickMoveTaskId, setQuickMoveTaskId] = useState<string | null>(null);
+  const [groupNameDrafts, setGroupNameDrafts] = useState<Record<string, string>>({});
+  const dragPreviewElement = useRef<HTMLDivElement | null>(null);
+  const dragPreviewFrame = useRef<number | null>(null);
+  const dragPreviewPoint = useRef({ x: 0, y: 0 });
+  const groupDragPreviewElement = useRef<HTMLDivElement | null>(null);
+  const groupDragPreviewFrame = useRef<number | null>(null);
+  const groupDragPreviewPoint = useRef({ x: 0, y: 0 });
+  const groupTimer = useRef<number | null>(null);
+  const groupCandidate = useRef<string | null>(null);
+  const groupReadyTarget = useRef<string | null>(null);
+  const lastDropPreview = useRef<SortDropPreview | null>(null);
+  const dragStart = useRef<DragStartState | null>(null);
+  const groupDragStart = useRef<DragStartState | null>(null);
+  const dragListeners = useRef<AbortController | null>(null);
+  const groupDragListeners = useRef<AbortController | null>(null);
+  const sortedTasks = useMemo(() => [...tasks].sort(sortBoardTasks), [tasks]);
+  const ungroupedTasks = sortedTasks.filter((task) => !task.sortGroupId);
+  const groups = useMemo(() => boardGroups(sortedTasks), [sortedTasks]);
+  const draggingTask = draggingId ? tasks.find((task) => task.id === draggingId) ?? null : null;
+
+  function clearGroupHover() {
+    if (groupTimer.current !== null) {
+      window.clearTimeout(groupTimer.current);
+      groupTimer.current = null;
+    }
+    groupCandidate.current = null;
+    groupReadyTarget.current = null;
+    setGroupTargetId(null);
+  }
+
+  function stopDragging() {
+    dragListeners.current?.abort();
+    dragListeners.current = null;
+    if (dragPreviewFrame.current !== null) {
+      window.cancelAnimationFrame(dragPreviewFrame.current);
+      dragPreviewFrame.current = null;
+    }
+    setDraggingId(null);
+    setDropPreview(null);
+    setDragPreview(null);
+    lastDropPreview.current = null;
+    dragStart.current = null;
+    clearGroupHover();
+  }
+
+  function stopGroupDragging() {
+    groupDragListeners.current?.abort();
+    groupDragListeners.current = null;
+    if (groupDragPreviewFrame.current !== null) {
+      window.cancelAnimationFrame(groupDragPreviewFrame.current);
+      groupDragPreviewFrame.current = null;
+    }
+    setDraggingGroupId(null);
+    setGroupDropBeforeId(null);
+    setGroupDragPreview(null);
+    groupDragStart.current = null;
+  }
+
+  function beginPointerDrag(event: ReactPointerEvent<HTMLElement>) {
+    const task = tasks.find((item) => item.id === event.currentTarget.dataset.sortDragId);
+    if (!task) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    if (event.currentTarget.setPointerCapture) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    dragListeners.current?.abort();
+    const controller = new AbortController();
+    dragListeners.current = controller;
+    window.addEventListener("pointermove", movePointerDrag, { passive: false, signal: controller.signal });
+    window.addEventListener("pointerup", (nextEvent) => void endPointerDrag(nextEvent), { passive: false, signal: controller.signal });
+    window.addEventListener("pointercancel", cancelPointerDrag, { signal: controller.signal });
+    setDragPreview({ task, x: event.clientX, y: event.clientY });
+    dragStart.current = {
+      id: task.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      started: false,
+    };
+  }
+
+  function movePointerDrag(event: ActivePointerEvent) {
+    const state = dragStart.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    if (!state.started && Math.hypot(deltaX, deltaY) < 3) return;
+
+    event.preventDefault();
+    if (!state.started) {
+      state.started = true;
+      setDraggingId(state.id);
+    }
+
+    moveDragPreview(event.clientX, event.clientY);
+    updateDropTarget(event.clientX, event.clientY, state.id);
+  }
+
+  async function endPointerDrag(event: ActivePointerEvent) {
+    const state = dragStart.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    if (!state.started) {
+      stopDragging();
+      return;
+    }
+
+    event.preventDefault();
+    const resolvedTarget = resolveDropTarget(event.clientX, event.clientY, state.id);
+    const target = lastDropPreview.current?.mode === "group" ? lastDropPreview.current : resolvedTarget ?? lastDropPreview.current;
+    try {
+      if (target?.mode === "group" && target.groupTaskId) {
+        if (groupReadyTarget.current === target.groupTaskId) {
+          const targetTask = tasks.find((task) => task.id === target.groupTaskId);
+          if (targetTask) {
+            await moveIntoPile(state.id, targetTask);
+          }
+        }
+      } else if (target) {
+        const lane = laneInfo(target.laneId);
+        await moveTask(state.id, lane.groupId, lane.groupName, target.beforeTaskId);
+      }
+    } finally {
+      stopDragging();
+    }
+  }
+
+  function cancelPointerDrag() {
+    stopDragging();
+  }
+
+  function beginGroupPointerDrag(event: ReactPointerEvent<HTMLElement>) {
+    const group = groups.find((item) => item.id === event.currentTarget.dataset.sortGroupDragId);
+    if (!group) return;
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    event.preventDefault();
+    if (event.currentTarget.setPointerCapture) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    }
+    groupDragListeners.current?.abort();
+    const controller = new AbortController();
+    groupDragListeners.current = controller;
+    window.addEventListener("pointermove", moveGroupPointerDrag, { passive: false, signal: controller.signal });
+    window.addEventListener("pointerup", (nextEvent) => void endGroupPointerDrag(nextEvent), { passive: false, signal: controller.signal });
+    window.addEventListener("pointercancel", cancelGroupPointerDrag, { signal: controller.signal });
+    setGroupDragPreview({ name: group.name, count: group.tasks.length, x: event.clientX, y: event.clientY });
+    groupDragStart.current = {
+      id: group.id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      started: false,
+    };
+  }
+
+  function moveGroupPointerDrag(event: ActivePointerEvent) {
+    const state = groupDragStart.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - state.startX;
+    const deltaY = event.clientY - state.startY;
+    if (!state.started && Math.hypot(deltaX, deltaY) < 3) return;
+
+    event.preventDefault();
+    if (!state.started) {
+      state.started = true;
+      setDraggingGroupId(state.id);
+    }
+
+    moveGroupDragPreview(event.clientX, event.clientY);
+    setGroupDropBeforeId(resolveGroupDropBefore(event.clientX, event.clientY, state.id));
+  }
+
+  async function endGroupPointerDrag(event: ActivePointerEvent) {
+    const state = groupDragStart.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    if (!state.started) {
+      stopGroupDragging();
+      return;
+    }
+
+    event.preventDefault();
+    const beforeGroupId = resolveGroupDropBefore(event.clientX, event.clientY, state.id);
+    try {
+      await moveGroup(state.id, beforeGroupId);
+    } finally {
+      stopGroupDragging();
+    }
+  }
+
+  function cancelGroupPointerDrag() {
+    stopGroupDragging();
+  }
+
+  function updateDropTarget(x: number, y: number, dragId: string) {
+    const target = resolveDropTarget(x, y, dragId);
+    if (!sameDropPreview(target, lastDropPreview.current)) {
+      lastDropPreview.current = target;
+      setDropPreview(target);
+    }
+
+    if (target?.mode === "group" && target.groupTaskId) {
+      if (groupCandidate.current === target.groupTaskId) return;
+      clearGroupHover();
+      groupCandidate.current = target.groupTaskId;
+      groupTimer.current = window.setTimeout(() => {
+        groupReadyTarget.current = target.groupTaskId;
+        setGroupTargetId(target.groupTaskId);
+      }, 1000);
+      return;
+    }
+
+    clearGroupHover();
+  }
+
+  function moveDragPreview(x: number, y: number) {
+    dragPreviewPoint.current = { x, y };
+    if (dragPreviewFrame.current !== null) return;
+    dragPreviewFrame.current = window.requestAnimationFrame(() => {
+      dragPreviewFrame.current = null;
+      if (!dragPreviewElement.current) return;
+      dragPreviewElement.current.style.transform = `translate3d(${dragPreviewPoint.current.x}px, ${dragPreviewPoint.current.y}px, 0) translate(-50%, -50%)`;
+    });
+  }
+
+  function moveGroupDragPreview(x: number, y: number) {
+    groupDragPreviewPoint.current = { x, y };
+    if (groupDragPreviewFrame.current !== null) return;
+    groupDragPreviewFrame.current = window.requestAnimationFrame(() => {
+      groupDragPreviewFrame.current = null;
+      if (!groupDragPreviewElement.current) return;
+      groupDragPreviewElement.current.style.transform = `translate3d(${groupDragPreviewPoint.current.x}px, ${groupDragPreviewPoint.current.y}px, 0) translate(-50%, -50%)`;
+    });
+  }
+
+  function resolveGroupDropBefore(x: number, y: number, dragGroupId: string) {
+    const element = document.elementFromPoint(x, y);
+    const groupElement = element?.closest<HTMLElement>("[data-sort-group-id]");
+    const groupId = groupElement?.dataset.sortGroupId;
+    if (groupId && groupId !== dragGroupId) {
+      const rect = groupElement.getBoundingClientRect();
+      return y < rect.top + rect.height / 2 ? groupId : nextGroupId(groupId, dragGroupId);
+    }
+    return null;
+  }
+
+  function nextGroupId(groupId: string, dragGroupId: string) {
+    const orderedGroups = groups.filter((group) => group.id !== dragGroupId);
+    const index = orderedGroups.findIndex((group) => group.id === groupId);
+    return index >= 0 ? orderedGroups[index + 1]?.id ?? null : null;
+  }
+
+  function resolveDropTarget(x: number, y: number, dragId: string): SortDropPreview | null {
+    const element = document.elementFromPoint(x, y);
+    const taskElement = element?.closest<HTMLElement>("[data-sort-task-id]");
+    const taskId = taskElement?.dataset.sortTaskId;
+    if (taskId && taskId !== dragId) {
+      const laneId = taskElement.closest<HTMLElement>("[data-sort-lane-id]")?.dataset.sortLaneId ?? "loose";
+      return { laneId, beforeTaskId: taskId, groupTaskId: taskId, mode: "group" };
+    }
+
+    const laneElement = element?.closest<HTMLElement>("[data-sort-lane-id]");
+    if (laneElement) {
+      const laneId = laneElement.dataset.sortLaneId ?? "loose";
+      return { laneId, beforeTaskId: beforeTaskIdFromLane(laneElement, y, dragId), groupTaskId: null, mode: "insert" };
+    }
+    return null;
+  }
+
+  function beforeTaskIdFromLane(laneElement: HTMLElement, y: number, dragId: string) {
+    const taskElements = [...laneElement.querySelectorAll<HTMLElement>("[data-sort-task-id]")].filter(
+      (item) => item.dataset.sortTaskId !== dragId,
+    );
+    const beforeElement = taskElements.find((item) => {
+      const rect = item.getBoundingClientRect();
+      return y < rect.top + rect.height / 2;
+    });
+    return beforeElement?.dataset.sortTaskId ?? null;
+  }
+
+  function laneInfo(laneId: string | null) {
+    if (!laneId || laneId === "loose") {
+      return { groupId: null, groupName: null };
+    }
+    const group = groups.find((item) => item.id === laneId);
+    return { groupId: laneId, groupName: group?.name ?? "New pile" };
+  }
+
+  function groupOrderBase(groupId: string) {
+    const groupIndex = Math.max(0, groups.findIndex((group) => group.id === groupId));
+    return (groupIndex + 1) * GROUP_ORDER_STEP;
+  }
+
+  function changeGroupName(groupId: string, value: string) {
+    setGroupNameDrafts((drafts) => ({ ...drafts, [groupId]: value }));
+  }
+
+  async function saveGroupName(groupId: string, value: string) {
+    const group = groups.find((item) => item.id === groupId);
+    if (!group) return;
+    const nextName = value.trim() || "New pile";
+    setGroupNameDrafts((drafts) => {
+      const nextDrafts = { ...drafts };
+      delete nextDrafts[groupId];
+      return nextDrafts;
+    });
+    if (nextName === group.name) return;
+    await onSortTasks(
+      group.tasks.map((task, index) => ({
+        id: task.id,
+        sortGroupId: groupId,
+        sortGroupName: nextName,
+        sortOrder: task.sortOrder || groupOrderBase(group.id) + (index + 1) * TILE_ORDER_STEP,
+      })),
+    );
+  }
+
+  async function dissolveGroup(groupId: string) {
+    const group = groups.find((item) => item.id === groupId);
+    if (!group) return;
+    const looseTasks = sortedTasks.filter((task) => !task.sortGroupId);
+    const baseOrder = looseTasks.length * TILE_ORDER_STEP;
+    await onSortTasks(
+      group.tasks.map((task, index) => ({
+        id: task.id,
+        sortGroupId: null,
+        sortGroupName: null,
+        sortOrder: baseOrder + (index + 1) * TILE_ORDER_STEP,
+      })),
+    );
+  }
+
+  async function moveGroup(groupId: string, beforeGroupId: string | null) {
+    const movingGroup = groups.find((group) => group.id === groupId);
+    if (!movingGroup) return;
+    const nextGroups = groups.filter((group) => group.id !== groupId);
+    const insertIndex = beforeGroupId ? nextGroups.findIndex((group) => group.id === beforeGroupId) : -1;
+    nextGroups.splice(insertIndex >= 0 ? insertIndex : nextGroups.length, 0, movingGroup);
+
+    await onSortTasks(
+      nextGroups.flatMap((group, groupIndex) => {
+        const baseOrder = (groupIndex + 1) * GROUP_ORDER_STEP;
+        return [...group.tasks].sort(sortBoardTasks).map((task, taskIndex) => ({
+          id: task.id,
+          sortGroupId: group.id,
+          sortGroupName: group.name,
+          sortOrder: baseOrder + (taskIndex + 1) * TILE_ORDER_STEP,
+        }));
+      }),
+    );
+  }
+
+  async function quickMoveToGroup(taskId: string, groupId: string) {
+    const group = groups.find((item) => item.id === groupId);
+    if (!group) return;
+    setQuickMoveTaskId(null);
+    await moveTask(taskId, group.id, group.name, null);
+  }
+
+  async function moveIntoPile(dragId: string, target: Task) {
+    if (target.sortGroupId) {
+      await moveTask(dragId, target.sortGroupId, target.sortGroupName ?? "New pile", null);
+      return;
+    }
+    await createGroup(dragId, target);
+  }
+
+  async function createGroup(dragId: string, target: Task) {
+    const source = tasks.find((task) => task.id === dragId);
+    if (!source || source.id === target.id) return;
+    const groupId = `group_${crypto.randomUUID()}`;
+    const groupName = source.categoryId === target.categoryId ? `${target.category.name} pile` : "New pile";
+    const baseOrder = (groups.length + 1) * GROUP_ORDER_STEP;
+    await onSortTasks([
+      { id: target.id, sortGroupId: groupId, sortGroupName: groupName, sortOrder: baseOrder + TILE_ORDER_STEP },
+      { id: source.id, sortGroupId: groupId, sortGroupName: groupName, sortOrder: baseOrder + TILE_ORDER_STEP * 2 },
+    ]);
+  }
+
+  async function moveTask(dragId: string, groupId: string | null, groupName: string | null, beforeTaskId: string | null) {
+    const dragged = tasks.find((task) => task.id === dragId);
+    if (!dragged) return;
+
+    const sourceGroupId = dragged.sortGroupId ?? null;
+    const sourceGroupName = dragged.sortGroupName ?? null;
+    const targetTasks = tasks.filter((task) => task.id !== dragId && (task.sortGroupId ?? null) === groupId).sort(sortBoardTasks);
+    const beforeIndex = beforeTaskId ? targetTasks.findIndex((task) => task.id === beforeTaskId) : -1;
+    const insertIndex = beforeIndex >= 0 ? beforeIndex : targetTasks.length;
+    targetTasks.splice(insertIndex, 0, dragged);
+    const targetBaseOrder = groupId ? groupOrderBase(groupId) : 0;
+
+    const updates = new Map<string, SortUpdate>();
+    targetTasks.forEach((task, index) => {
+      updates.set(task.id, {
+        id: task.id,
+        sortGroupId: groupId,
+        sortGroupName: groupName,
+        sortOrder: targetBaseOrder + (index + 1) * TILE_ORDER_STEP,
+      });
+    });
+
+    if (sourceGroupId !== groupId) {
+      const sourceBaseOrder = sourceGroupId ? groupOrderBase(sourceGroupId) : 0;
+      tasks
+        .filter((task) => task.id !== dragId && (task.sortGroupId ?? null) === sourceGroupId)
+        .sort(sortBoardTasks)
+        .forEach((task, index) => {
+          updates.set(task.id, {
+            id: task.id,
+            sortGroupId: sourceGroupId,
+            sortGroupName: sourceGroupName,
+            sortOrder: sourceBaseOrder + (index + 1) * TILE_ORDER_STEP,
+          });
+        });
+    }
+
+    await onSortTasks([...updates.values()]);
+  }
+
+  function renderLaneTiles(laneTasks: Task[], laneId: string) {
+    const visibleTasks = laneTasks;
+    const nodes: ReactNode[] = [];
+    visibleTasks.forEach((task) => {
+      const quickMoveGroups = groups.filter((group) => group.id !== task.sortGroupId);
+      if (shouldShowInsertSlot(laneId, task.id)) {
+        nodes.push(<SortDropSlot key={`slot-before-${task.id}`} />);
+      }
+      nodes.push(
+        <Fragment key={task.id}>
+          <SortTile
+            task={task}
+            busy={busyTaskId === task.id}
+            justCompleted={recentlyCompletedId === task.id}
+            dragging={draggingId === task.id}
+            grouping={groupTargetId === task.id}
+            groupCandidate={dropPreview?.mode === "group" && dropPreview.groupTaskId === task.id}
+            quickMoveGroups={quickMoveGroups}
+            quickMoveOpen={quickMoveTaskId === task.id}
+            onOpen={() => onOpen(task)}
+            onComplete={() => onComplete(task)}
+            onReopen={() => onReopen(task)}
+            onPointerDown={beginPointerDrag}
+            onToggleQuickMove={() => setQuickMoveTaskId((current) => (current === task.id ? null : task.id))}
+            onQuickMove={(groupId) => void quickMoveToGroup(task.id, groupId)}
+          />
+          {groupTargetId === task.id && draggingTask ? <SortPilePreview source={draggingTask} target={task} /> : null}
+        </Fragment>,
+      );
+    });
+
+    if (shouldShowInsertSlot(laneId, null)) {
+      nodes.push(<SortDropSlot key={`slot-end-${laneId}`} />);
+    }
+
+    return nodes;
+  }
+
+  function shouldShowInsertSlot(laneId: string, beforeTaskId: string | null) {
+    return Boolean(draggingId && dropPreview?.mode === "insert" && dropPreview.laneId === laneId && dropPreview.beforeTaskId === beforeTaskId);
+  }
+
+  return (
+    <>
+      <section className="view-head sort-head">
+        <div>
+          <h2>Sort board</h2>
+        </div>
+      </section>
+
+      <section className="sort-board" aria-label="Task sort board">
+        {groups.map((group) => (
+          <Fragment key={group.id}>
+            {draggingGroupId && groupDropBeforeId === group.id ? <SortGroupDropSlot /> : null}
+            <section
+              className={clsx(
+                "sort-lane sort-pile",
+                draggingId && "is-drop-ready",
+                dropPreview?.laneId === group.id && "is-drop-target",
+                draggingGroupId === group.id && "is-group-dragging",
+              )}
+              data-sort-lane-id={group.id}
+              data-sort-group-id={group.id}
+              aria-label={group.name}
+            >
+              <header className="sort-lane-head sort-pile-head">
+                <button
+                  className="sort-group-drag-handle"
+                  type="button"
+                  data-sort-group-drag-id={group.id}
+                  onPointerDown={beginGroupPointerDrag}
+                  aria-label={`Move ${group.name}`}
+                >
+                  <Menu size={22} aria-hidden="true" />
+                </button>
+                <input
+                  className="sort-group-name-input"
+                  value={groupNameDrafts[group.id] ?? group.name}
+                  onChange={(event) => changeGroupName(group.id, event.target.value)}
+                  onBlur={(event) => void saveGroupName(group.id, event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                  aria-label={`Rename ${group.name}`}
+                />
+                <div className="sort-group-actions">
+                  <span>{group.tasks.length}</span>
+                  <button className="sort-group-action" type="button" onClick={() => void dissolveGroup(group.id)} aria-label={`Move ${group.name} back to loose tiles`}>
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </header>
+              <div className="sort-tile-list">
+                {renderLaneTiles(group.tasks, group.id)}
+              </div>
+            </section>
+          </Fragment>
+        ))}
+        {draggingGroupId && groupDropBeforeId === null ? <SortGroupDropSlot /> : null}
+
+        <section
+          className={clsx("sort-lane sort-loose-lane", draggingId && "is-drop-ready", dropPreview?.laneId === "loose" && "is-drop-target")}
+          data-sort-lane-id="loose"
+          aria-label="Loose tasks"
+        >
+          <header className="sort-lane-head">
+            <h3>Loose tiles</h3>
+            <span>{ungroupedTasks.length}</span>
+          </header>
+          <div className="sort-tile-list">
+            {ungroupedTasks.length || shouldShowInsertSlot("loose", null) ? (
+              renderLaneTiles(ungroupedTasks, "loose")
+            ) : (
+              <p className="sort-empty">Drag tiles here to pull them out of a pile.</p>
+            )}
+          </div>
+        </section>
+      </section>
+      {dragPreview && draggingTask ? (
+        <div
+          ref={dragPreviewElement}
+          className="sort-drag-preview"
+          style={{ transform: `translate3d(${dragPreview.x}px, ${dragPreview.y}px, 0) translate(-50%, -50%)` }}
+          aria-hidden="true"
+        >
+          <strong>{dragPreview.task.title}</strong>
+          <small>{dragPreview.task.category.name} · {dragPreview.task.assignee?.name ?? "Unassigned"}</small>
+        </div>
+      ) : null}
+      {groupDragPreview ? (
+        <div
+          ref={groupDragPreviewElement}
+          className="sort-drag-preview sort-group-drag-preview"
+          style={{ transform: `translate3d(${groupDragPreview.x}px, ${groupDragPreview.y}px, 0) translate(-50%, -50%)` }}
+          aria-hidden="true"
+        >
+          <strong>{groupDragPreview.name}</strong>
+          <small>{groupDragPreview.count} tiles</small>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function SortTile({
+  task,
+  busy,
+  justCompleted,
+  dragging,
+  grouping,
+  groupCandidate,
+  quickMoveGroups,
+  quickMoveOpen,
+  onOpen,
+  onComplete,
+  onReopen,
+  onPointerDown,
+  onToggleQuickMove,
+  onQuickMove,
+}: {
+  task: Task;
+  busy: boolean;
+  justCompleted: boolean;
+  dragging: boolean;
+  grouping: boolean;
+  groupCandidate: boolean;
+  quickMoveGroups: Array<{ id: string; name: string }>;
+  quickMoveOpen: boolean;
+  onOpen: () => void;
+  onComplete: () => void;
+  onReopen: () => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
+  onToggleQuickMove: () => void;
+  onQuickMove: (groupId: string) => void;
+}) {
+  const done = task.status === "done";
+  const canQuickMove = quickMoveGroups.length > 0;
+  return (
+    <article
+      data-sort-task-id={task.id}
+      className={clsx(
+        "sort-tile",
+        dragging && "is-dragging",
+        groupCandidate && "is-group-candidate",
+        grouping && "is-group-target",
+        justCompleted && "just-completed",
+      )}
+    >
+      <button
+        className={clsx("complete-button", done && "is-done", justCompleted && "is-celebrating")}
+        type="button"
+        disabled={busy}
+        onClick={done ? onReopen : onComplete}
+        aria-label={done ? `Reopen ${task.title}` : `Complete ${task.title}`}
+      >
+        {done ? <Check size={18} /> : <Circle size={18} />}
+      </button>
+      <button className="sort-tile-main" type="button" onClick={onOpen}>
+        <span>
+          <strong>{task.title}</strong>
+          <small>{task.category.name} · {task.assignee?.name ?? "Unassigned"}</small>
+        </span>
+      </button>
+      {canQuickMove ? (
+        <button
+          className={clsx("sort-quick-move", quickMoveOpen && "is-open")}
+          type="button"
+          onClick={onToggleQuickMove}
+          disabled={busy}
+          aria-label={`Move ${task.title} to a pile`}
+          aria-expanded={quickMoveOpen}
+        >
+          <FolderInput size={18} aria-hidden="true" />
+        </button>
+      ) : null}
+      <button
+        className="sort-drag-handle"
+        type="button"
+        data-sort-drag-id={task.id}
+        onPointerDown={onPointerDown}
+        aria-label={`Move ${task.title}`}
+      >
+        <Menu size={24} aria-hidden="true" />
+      </button>
+      {quickMoveOpen ? (
+        <div className="sort-quick-move-menu" role="menu" aria-label={`Choose a pile for ${task.title}`}>
+          {quickMoveGroups.map((group) => (
+            <button key={group.id} type="button" role="menuitem" onClick={() => onQuickMove(group.id)}>
+              {group.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {grouping ? <span className="drop-to-group">Make pile</span> : null}
+    </article>
+  );
+}
+
+function SortDropSlot() {
+  return <div className="sort-drop-slot" aria-hidden="true" />;
+}
+
+function SortGroupDropSlot() {
+  return <div className="sort-group-drop-slot" aria-hidden="true" />;
+}
+
+function SortPilePreview({ source, target }: { source: Task; target: Task }) {
+  return (
+    <div className="sort-pile-preview" aria-hidden="true">
+      <span>{target.title}</span>
+      <span>{source.title}</span>
+    </div>
+  );
+}
+
+function DoneArchive({
+  tasks,
+  busyTaskId,
+  recentlyCompletedId,
+  onOpen,
+  onComplete,
+  onReopen,
+}: {
+  tasks: Task[];
+  busyTaskId: string | null;
+  recentlyCompletedId: string | null;
+  onOpen: (task: Task) => void;
+  onComplete: (task: Task) => void;
+  onReopen: (task: Task) => void;
+}) {
+  return (
+    <details className="done-archive">
+      <summary>
+        <span>Done</span>
+        <small>{tasks.length} completed</small>
+      </summary>
+      {tasks.length ? (
+        <section className="task-stack compact-stack" aria-label="Completed tasks">
+          {tasks.map((task) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              busy={busyTaskId === task.id}
+              justCompleted={recentlyCompletedId === task.id}
+              onOpen={() => onOpen(task)}
+              onComplete={() => onComplete(task)}
+              onReopen={() => onReopen(task)}
+            />
+          ))}
+        </section>
+      ) : (
+        <p className="sort-empty">Nothing checked off yet.</p>
+      )}
+    </details>
+  );
+}
+
 function SectionHeader({ title, count }: { title: string; count: number }) {
   return (
     <header className="board-section-head">
@@ -1071,6 +1931,7 @@ function TaskCard({
   const done = task.status === "done";
   const showingDone = done || justCompleted;
   const overdue = isTaskOverdue(task);
+  const reviewedByClaw = task.agentReview.isFresh;
   return (
     <article className={clsx("task-card", overdue && "is-overdue", justCompleted && "just-completed")} data-testid="task-card">
       <button
@@ -1103,6 +1964,11 @@ function TaskCard({
           {task.photos.length ? (
             <span className="task-pill photo-indicator" aria-label={`${task.photos.length} photo${task.photos.length === 1 ? "" : "s"} attached`}>
               <Camera size={12} />
+            </span>
+          ) : null}
+          {reviewedByClaw ? (
+            <span className="task-pill claw-pill" aria-label="Reviewed by Claw" title={clawReviewTitle(task)}>
+              <span aria-hidden="true">🦞</span>
             </span>
           ) : null}
           {task.recurringRule?.isActive ? (
@@ -1146,11 +2012,25 @@ function TaskDetailSheet({
   const [repeatEnds, setRepeatEnds] = useState(Boolean(task.recurringRule?.endDate));
   const [repeatEndDate, setRepeatEndDate] = useState(task.recurringRule?.endDate ?? "");
   const [isEditing, setIsEditing] = useState(false);
+  const [editTitleDraft, setEditTitleDraft] = useState({ taskId: task.id, value: task.title });
   const [expandedPhotoId, setExpandedPhotoId] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  const reviewedByClaw = task.agentReview.isFresh;
+  const editTitle = editTitleDraft.taskId === task.id ? editTitleDraft.value : task.title;
+
+  useEffect(() => {
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousHtmlOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousHtmlOverflow;
+    };
+  }, []);
 
   async function updateTask(
-    patch: Partial<Pick<Task, "categoryId" | "assigneeId" | "priority" | "dueAt">> & {
+    patch: Partial<Pick<Task, "title" | "categoryId" | "assigneeId" | "priority" | "dueAt">> & {
       recurrence?:
         | {
             frequency: RecurrenceFrequency;
@@ -1177,6 +2057,16 @@ function TaskDetailSheet({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveTitle() {
+    const title = editTitle.trim();
+    if (!title) {
+      setEditTitleDraft({ taskId: task.id, value: task.title });
+      return;
+    }
+    if (title === task.title) return;
+    await updateTask({ title });
   }
 
   async function saveRecurrence(
@@ -1237,10 +2127,13 @@ function TaskDetailSheet({
   return (
     <section
       className="detail-backdrop"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
       style={{ alignItems: "flex-start", padding: "calc(58px + env(safe-area-inset-top)) var(--space-3) 24px" }}
       aria-label="Task detail"
     >
-      <div className="detail-sheet" style={{ maxHeight: "calc(100dvh - 82px - env(safe-area-inset-top))" }}>
+      <div className="detail-sheet" onClick={(event) => event.stopPropagation()} style={{ maxHeight: "calc(100dvh - 82px - env(safe-area-inset-top))" }}>
         <header className="detail-header">
           <div>
             <p className="eyebrow">{task.category.name}</p>
@@ -1282,6 +2175,11 @@ function TaskDetailSheet({
               {recurrenceSummary(task.recurringRule)}
             </span>
           ) : null}
+          {reviewedByClaw ? (
+            <span className="claw-review-chip" aria-label="Reviewed by Claw" title={clawReviewTitle(task)}>
+              <span aria-hidden="true">🦞</span>
+            </span>
+          ) : null}
         </div>
 
         <details className="plan-box" aria-label="Plan this task" open={Boolean(task.plannedFor)}>
@@ -1320,6 +2218,26 @@ function TaskDetailSheet({
 
         {isEditing ? (
           <section className="edit-panel" aria-label="Edit task details">
+          <label className="field-block edit-title-field">
+            <span>Title</span>
+              <input
+                type="text"
+                value={editTitle}
+              onChange={(event) => setEditTitleDraft({ taskId: task.id, value: event.target.value })}
+              onBlur={saveTitle}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.currentTarget.blur();
+                }
+                if (event.key === "Escape") {
+                  setEditTitleDraft({ taskId: task.id, value: task.title });
+                  event.currentTarget.blur();
+                }
+              }}
+              disabled={busy || parentBusy}
+              maxLength={160}
+            />
+          </label>
           <div className="field-grid">
             <label className="field-block">
               <span>Category</span>
@@ -1459,7 +2377,7 @@ function TaskDetailSheet({
                 aria-label={`Open ${photo.fileName}`}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={`/api/photos/${photo.id}`} alt={photo.caption || photo.fileName} />
+                <img src={`/api/photos/${photo.id}?variant=thumb`} alt={photo.caption || photo.fileName} loading="lazy" decoding="async" />
               </button>
             ))}
           </div>
@@ -1528,7 +2446,7 @@ function TaskDetailSheet({
           aria-label="Close enlarged photo"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img style={{ maxWidth: "min(100%, 720px)", maxHeight: "78dvh", objectFit: "contain", borderRadius: 18 }} src={`/api/photos/${expandedPhotoId}`} alt="" />
+          <img style={{ maxWidth: "min(100%, 720px)", maxHeight: "78dvh", objectFit: "contain", borderRadius: 18 }} src={`/api/photos/${expandedPhotoId}?variant=large`} alt="" decoding="async" />
         </button>
       ) : null}
     </section>
@@ -1557,8 +2475,8 @@ function NavButton({
 function EmptyState({ view }: { view: ViewMode }) {
   return (
     <section className="empty-state">
-      {view === "done" ? <Undo2 size={26} /> : <Inbox size={26} />}
-      <h3>{view === "done" ? "Nothing checked off yet" : "Clear for now"}</h3>
+      {view === "sort" ? <ListFilter size={26} /> : <Inbox size={26} />}
+      <h3>{view === "sort" ? "Nothing to arrange" : "Clear for now"}</h3>
     </section>
   );
 }
@@ -1644,6 +2562,56 @@ function personPillClass(person: Person | null) {
   if (person?.slug === "caroline") return "person-caroline";
   if (person?.slug === "ryan") return "person-ryan";
   return "person-unassigned";
+}
+
+function sameDropPreview(first: SortDropPreview | null, second: SortDropPreview | null) {
+  if (first === second) return true;
+  if (!first || !second) return false;
+  return (
+    first.laneId === second.laneId &&
+    first.beforeTaskId === second.beforeTaskId &&
+    first.groupTaskId === second.groupTaskId &&
+    first.mode === second.mode
+  );
+}
+
+function sortBoardTasks(first: Task, second: Task) {
+  const firstGroup = first.sortGroupId ?? "";
+  const secondGroup = second.sortGroupId ?? "";
+  if (firstGroup !== secondGroup) return firstGroup.localeCompare(secondGroup);
+  if (first.sortOrder !== second.sortOrder) return first.sortOrder - second.sortOrder;
+  return first.createdAt.localeCompare(second.createdAt);
+}
+
+function boardGroups(tasks: Task[]) {
+  const groups = new Map<string, { id: string; name: string; order: number; tasks: Task[] }>();
+  for (const task of tasks) {
+    if (!task.sortGroupId) continue;
+    const group = groups.get(task.sortGroupId) ?? {
+      id: task.sortGroupId,
+      name: task.sortGroupName || "New pile",
+      order: task.sortOrder,
+      tasks: [],
+    };
+    group.tasks.push(task);
+    group.order = Math.min(group.order, task.sortOrder);
+    groups.set(task.sortGroupId, group);
+  }
+  return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      tasks: group.tasks.sort(sortBoardTasks),
+    }))
+    .sort((first, second) => {
+      const orderDiff = first.order - second.order;
+      if (orderDiff !== 0) return orderDiff;
+      return first.name.localeCompare(second.name);
+    });
+}
+
+function clawReviewTitle(task: Task) {
+  if (!task.agentReview.reviewedAt) return "Reviewed by Claw";
+  return `Reviewed by Claw ${formatNoteTime(task.agentReview.reviewedAt)}`;
 }
 
 function noteAuthorLabel(note: TaskNote, people: Person[]) {
@@ -1778,7 +2746,7 @@ function recurrenceSummary(rule: NonNullable<Task["recurringRule"]>) {
 
 function viewTitle(view: ViewMode, count: number) {
   if (view === "today") return count ? `${count} scheduled or due` : "Nada";
-  if (view === "done") return count ? `${count} checked off` : "Fresh slate";
+  if (view === "sort") return count ? `${count} tiles to arrange` : "Fresh slate";
   if (view === "week") return count ? `${count} scheduled or due` : "Nada";
   return `${count} open tasks`;
 }

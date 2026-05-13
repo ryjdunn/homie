@@ -8,7 +8,7 @@ INSTALL_SERVICE=1
 RUN_VALIDATION=0
 SKIP_BREW=0
 PORT_VALUE="${PORT:-3000}"
-HOST_VALUE="${HOMIE_HOST:-0.0.0.0}"
+HOST_VALUE="${HOMIE_HOST:-127.0.0.1}"
 DATABASE_URL_VALUE="${DATABASE_URL:-postgres://localhost:5432/homie}"
 UPLOAD_DIR_VALUE="${HOMIE_UPLOAD_DIR:-${ROOT}/data/uploads}"
 
@@ -17,21 +17,21 @@ usage() {
 Usage: ./setup.sh [options]
 
 Sets up Homie on a Mac Studio/Mac mini using Homebrew Postgres, Node, and a
-user-level launchd service. Defaults are safe for Tailscale LAN hosting.
+user-level launchd service. Defaults bind to localhost for Tailscale Serve.
 
 Options:
   --no-service       Prepare the app but do not install/start launchd.
   --validate         Run npm run validate:local after setup.
   --skip-brew        Do not install or upgrade Homebrew packages.
   --port PORT        Port for the launchd service. Default: 3000.
-  --host HOST        Hostname for Next.js. Default: 0.0.0.0.
+  --host HOST        Hostname for Next.js. Default: 127.0.0.1.
   -h, --help         Show this help.
 
 Environment overrides:
   DATABASE_URL       Default: postgres://localhost:5432/homie
   HOMIE_UPLOAD_DIR   Default: ./data/uploads
   HOMIE_AGENT_TOKEN  Default is generated into .env when missing.
-  HOMIE_HOST         Default: 0.0.0.0
+  HOMIE_HOST         Default: 127.0.0.1
 EOF
 }
 
