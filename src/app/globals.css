@@ -681,6 +681,21 @@ textarea:focus-visible {
   transform: scale(0.985);
 }
 
+.sort-tile.is-completed {
+  border-color: color-mix(in srgb, var(--line) 72%, var(--surface));
+  background: color-mix(in srgb, var(--surface) 76%, var(--surface-soft));
+  opacity: 0.62;
+}
+
+.sort-tile.is-completed .sort-tile-main strong {
+  color: color-mix(in srgb, var(--foreground) 64%, var(--muted));
+}
+
+.sort-tile.is-completed .sort-drag-handle,
+.sort-tile.is-completed .sort-quick-move {
+  color: color-mix(in srgb, var(--muted) 70%, var(--hero));
+}
+
 .sort-tile.is-group-candidate {
   border-color: color-mix(in srgb, var(--hero) 58%, var(--line));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--hero) 14%, transparent);
@@ -1133,6 +1148,20 @@ textarea:focus-visible {
 .task-card.just-completed {
   background: var(--color-surface-success);
   animation: task-done-settle 440ms cubic-bezier(0.2, 0.85, 0.2, 1);
+}
+
+.task-card.is-completed {
+  background: color-mix(in srgb, var(--surface) 76%, var(--surface-soft));
+  opacity: 0.66;
+}
+
+.task-card.is-completed .task-title,
+.task-card.is-completed .task-description {
+  color: color-mix(in srgb, var(--foreground) 58%, var(--muted));
+}
+
+.task-card.is-completed .task-pill:not(.claw-pill) {
+  opacity: 0.7;
 }
 
 .task-card.just-completed::after {

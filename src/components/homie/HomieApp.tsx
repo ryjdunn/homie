@@ -164,6 +164,7 @@ type ActivePointerEvent = {
 
 const GROUP_ORDER_STEP = 100000;
 const TILE_ORDER_STEP = 1000;
+const RECENT_COMPLETION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 const priorityLabels = {
   low: "Low",
@@ -255,21 +256,25 @@ export function HomieApp() {
   }, [themeId]);
 
   const visibleTasks = useMemo(() => {
-    return tasks.filter((task) => {
+    const now = new Date();
+    const nextTasks = tasks.filter((task) => {
       if (view === "add" || view === "today" || view === "week") return false;
-      if (view === "sort") return task.status !== "done" && task.status !== "archived";
-      if (task.status === "done") return false;
+      if (view === "sort" && !isVisibleBoardTask(task, now)) return false;
+      if (view !== "sort" && !isVisibleBoardTask(task, now)) return false;
       if (categoryFilter !== "all" && task.categoryId !== categoryFilter) return false;
       if (assigneeFilter !== "all" && task.assigneeId !== assigneeFilter) return false;
       if (timeSensitiveOnly && task.urgency === "normal") return false;
       return true;
     });
+    return view === "all" ? nextTasks.sort(sortActiveBeforeDone) : nextTasks;
   }, [assigneeFilter, categoryFilter, tasks, timeSensitiveOnly, view]);
 
   const completedTasks = useMemo(() => {
+    const now = new Date();
     return tasks
       .filter((task) => {
         if (task.status !== "done") return false;
+        if (isRecentlyCompletedTask(task, now)) return false;
         if (categoryFilter !== "all" && task.categoryId !== categoryFilter) return false;
         if (assigneeFilter !== "all" && task.assigneeId !== assigneeFilter) return false;
         return true;
@@ -713,27 +718,28 @@ function WeekPlan({
   onComplete: (task: Task) => void;
   onReopen: (task: Task) => void;
 }) {
-  const openTasks = filterByAssigneeScope(tasks.filter(isOpenTask), assigneeScopeId);
+  const now = new Date();
+  const visibleTasks = filterByAssigneeScope(tasks.filter((task) => isVisibleBoardTask(task, now)), assigneeScopeId);
   const weekStart = days[0]?.value;
   const weekEnd = days[days.length - 1]?.value;
-  const plannedThisWeek = openTasks.filter(
-    (task) => task.plannedFor && days.some((day) => day.value === task.plannedFor) && !isPastPlannedTask(task, weekStart ?? dateKey(new Date())),
-  );
+  const plannedThisWeek = visibleTasks
+    .filter((task) => task.plannedFor && days.some((day) => day.value === task.plannedFor) && !isPastPlannedTask(task, weekStart ?? dateKey(new Date())))
+    .sort(sortActiveBeforeDone);
   const dueThisWeek =
     weekStart && weekEnd
-      ? openTasks
+      ? visibleTasks
           .filter(
             (task) =>
               isPastPlannedTask(task, weekStart) ||
               (!task.plannedFor && task.dueAt && isDateKeyInRange(dueDateKey(task.dueAt), weekStart, weekEnd)),
           )
-          .sort((first, second) => sortDueTasks(first, second, weekStart))
+          .sort((first, second) => sortDueTasksWithCompleted(first, second, weekStart))
       : [];
   const weekCount = plannedThisWeek.length + dueThisWeek.length;
   const plannedDays = days
     .map((day) => ({
       day,
-      tasks: openTasks.filter((task) => task.plannedFor === day.value),
+      tasks: visibleTasks.filter((task) => task.plannedFor === day.value).sort(sortActiveBeforeDone),
     }))
     .filter((item) => item.tasks.length > 0);
 
@@ -816,11 +822,12 @@ function TodayPlan({
   onComplete: (task: Task) => void;
   onReopen: (task: Task) => void;
 }) {
-  const openTasks = filterByAssigneeScope(tasks.filter(isOpenTask), assigneeScopeId);
-  const scheduledToday = openTasks.filter((task) => task.plannedFor === todayKey);
-  const dueToday = openTasks
+  const now = new Date();
+  const visibleTasks = filterByAssigneeScope(tasks.filter((task) => isVisibleBoardTask(task, now)), assigneeScopeId);
+  const scheduledToday = visibleTasks.filter((task) => task.plannedFor === todayKey).sort(sortActiveBeforeDone);
+  const dueToday = visibleTasks
     .filter((task) => isDueTodayTask(task, todayKey))
-    .sort((first, second) => sortDueTasks(first, second, todayKey));
+    .sort((first, second) => sortDueTasksWithCompleted(first, second, todayKey));
   const todayCount = scheduledToday.length + dueToday.length;
 
   return (
@@ -1535,6 +1542,7 @@ function SortTile({
         dragging && "is-dragging",
         groupCandidate && "is-group-candidate",
         grouping && "is-group-target",
+        done && "is-completed",
         justCompleted && "just-completed",
       )}
     >
@@ -1933,7 +1941,7 @@ function TaskCard({
   const overdue = isTaskOverdue(task);
   const reviewedByClaw = task.agentReview.isFresh;
   return (
-    <article className={clsx("task-card", overdue && "is-overdue", justCompleted && "just-completed")} data-testid="task-card">
+    <article className={clsx("task-card", overdue && "is-overdue", done && "is-completed", justCompleted && "just-completed")} data-testid="task-card">
       <button
         className={clsx("complete-button", showingDone && "is-done", justCompleted && "is-celebrating")}
         type="button"
@@ -2553,6 +2561,18 @@ function isOpenTask(task: Task) {
   return task.status !== "done" && task.status !== "archived";
 }
 
+function isVisibleBoardTask(task: Task, now = new Date()) {
+  return isOpenTask(task) || isRecentlyCompletedTask(task, now);
+}
+
+function isRecentlyCompletedTask(task: Task, now = new Date()) {
+  if (task.status !== "done") return false;
+  const completedAt = task.completedAt ?? task.updatedAt;
+  if (!completedAt) return false;
+  const completedTime = new Date(completedAt).getTime();
+  return Number.isFinite(completedTime) && now.getTime() - completedTime < RECENT_COMPLETION_WINDOW_MS;
+}
+
 function filterByAssigneeScope(tasks: Task[], assigneeScopeId: string) {
   if (assigneeScopeId === "all") return tasks;
   return tasks.filter((task) => task.assigneeId === assigneeScopeId);
@@ -2579,6 +2599,8 @@ function sortBoardTasks(first: Task, second: Task) {
   const firstGroup = first.sortGroupId ?? "";
   const secondGroup = second.sortGroupId ?? "";
   if (firstGroup !== secondGroup) return firstGroup.localeCompare(secondGroup);
+  const statusDiff = completedSortValue(first) - completedSortValue(second);
+  if (statusDiff !== 0) return statusDiff;
   if (first.sortOrder !== second.sortOrder) return first.sortOrder - second.sortOrder;
   return first.createdAt.localeCompare(second.createdAt);
 }
@@ -2690,6 +2712,25 @@ function sortDueTasks(first: Task, second: Task, todayKey = dateKey(new Date()))
   const secondDue = taskDueBucketKey(second, todayKey);
   if (firstDue !== secondDue) return firstDue.localeCompare(secondDue);
   return first.createdAt.localeCompare(second.createdAt);
+}
+
+function sortDueTasksWithCompleted(first: Task, second: Task, todayKey = dateKey(new Date())) {
+  const statusDiff = completedSortValue(first) - completedSortValue(second);
+  if (statusDiff !== 0) return statusDiff;
+  return sortDueTasks(first, second, todayKey);
+}
+
+function sortActiveBeforeDone(first: Task, second: Task) {
+  const statusDiff = completedSortValue(first) - completedSortValue(second);
+  if (statusDiff !== 0) return statusDiff;
+  if (first.status === "done" && second.status === "done") {
+    return (second.completedAt ?? second.updatedAt).localeCompare(first.completedAt ?? first.updatedAt);
+  }
+  return 0;
+}
+
+function completedSortValue(task: Task) {
+  return task.status === "done" ? 1 : 0;
 }
 
 function taskDueBucketKey(task: Task, todayKey: string) {

@@ -329,7 +329,7 @@ test.describe("real-world mobile UX and database validation", () => {
     });
   });
 
-  test("completes a planned task from the Week view and removes it from the plan", async ({ page }, testInfo) => {
+  test("keeps a recently completed planned task in the Week view", async ({ page }, testInfo) => {
     const title = uniqueTitle("E2E planned done", testInfo);
     await createTaskViaApi(page, {
       title,
@@ -342,9 +342,9 @@ test.describe("real-world mobile UX and database validation", () => {
     const card = plannedTaskCard(page, title);
     await expect(card).toBeVisible();
     await card.getByRole("button", { name: `Complete ${title}` }).click();
-    await expect(plannedTaskCard(page, title)).toHaveCount(0);
-    await page.getByRole("button", { name: "Done", exact: true }).click();
-    await expect(taskCard(page, title)).toBeVisible();
+    await expect(plannedTaskCard(page, title)).toBeVisible();
+    await expect(plannedTaskCard(page, title)).toHaveClass(/is-completed/);
+    await expect(plannedTaskCard(page, title).getByRole("button", { name: `Reopen ${title}` })).toBeVisible();
 
     await withDb(async (sql) => {
       const rows = await sql`
@@ -360,15 +360,17 @@ test.describe("real-world mobile UX and database validation", () => {
     });
   });
 
-  test("completes a task, celebrates it in Done, and stores completion metadata", async ({ page }, testInfo) => {
+  test("keeps a recently completed task visible before moving it to Done", async ({ page }, testInfo) => {
     const title = uniqueTitle("E2E complete", testInfo);
     await createTaskViaApi(page, { title, categoryId: "cat_errands", assigneeId: "person_ryan" });
 
     await gotoAll(page);
     await page.getByRole("button", { name: `Complete ${title}` }).click();
-    await page.getByRole("button", { name: "Done", exact: true }).click();
 
-    await expect(taskCard(page, title)).toBeVisible();
+    const completedCard = taskCard(page, title);
+    await expect(completedCard).toBeVisible();
+    await expect(completedCard).toHaveClass(/is-completed/);
+    await expect(completedCard.getByRole("button", { name: `Reopen ${title}` })).toBeVisible();
     await withDb(async (sql) => {
       const rows = await sql`
         select status, completed_by_id, completed_at
@@ -379,6 +381,13 @@ test.describe("real-world mobile UX and database validation", () => {
       expect(rows[0]?.completed_by_id).toBe("person_ryan");
       expect(rows[0]?.completed_at).toBeTruthy();
     });
+
+    await ageCompletedTask(title);
+    await page.reload();
+    await page.getByRole("button", { name: "All", exact: true }).click();
+    await expect(taskCard(page, title)).not.toBeVisible();
+    await page.locator("details.done-archive > summary").click();
+    await expect(taskCard(page, title)).toBeVisible();
   });
 
   test("reopens a completed task from the Done view", async ({ page }, testInfo) => {
@@ -387,15 +396,24 @@ test.describe("real-world mobile UX and database validation", () => {
 
     await gotoAll(page);
     await page.getByRole("button", { name: `Complete ${title}` }).click();
-    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await ageCompletedTask(title);
+    await page.reload();
+    await page.getByRole("button", { name: "All", exact: true }).click();
+    await page.locator("details.done-archive > summary").click();
     await page.getByRole("button", { name: `Reopen ${title}` }).click();
     await page.getByRole("button", { name: "All", exact: true }).click();
 
     await expect(taskCard(page, title)).toBeVisible();
-    await withDb(async (sql) => {
-      const rows = await sql`select status, completed_at from tasks where title = ${title}`;
-      expect(rows[0]).toMatchObject({ status: "active", completed_at: null });
-    });
+    await expect
+      .poll(
+        () =>
+          withDb(async (sql) => {
+            const rows = await sql`select status, completed_at from tasks where title = ${title}`;
+            return rows[0];
+          }),
+        { timeout: 10_000 },
+      )
+      .toMatchObject({ status: "active", completed_at: null });
   });
 
   test("removes a task from the board via the UI archive flow", async ({ page }, testInfo) => {
@@ -1016,6 +1034,17 @@ async function getRecurringRule(title: string) {
     `;
     expect(rows).toHaveLength(1);
     return rows[0] as { frequency: string; interval: number; is_active: boolean };
+  });
+}
+
+async function ageCompletedTask(title: string) {
+  await withDb(async (sql) => {
+    await sql`
+      update tasks
+      set completed_at = now() - interval '25 hours',
+          updated_at = now() - interval '25 hours'
+      where title = ${title}
+    `;
   });
 }
 
